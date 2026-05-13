@@ -1,0 +1,55 @@
+appId: com.opendev.ide
+productName: openDev
+artifactName: ${productName}-${version}-${arch}.${ext}
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - "!node_modules/**/*"
+asarUnpack:
+  - "**/*.node"
+  # The TS language server is JS, but it has to be reachable as a file on
+  # disk so we can spawn it via Electron-as-Node — can't run code from
+  # inside the asar bundle.
+  - "node_modules/typescript-language-server/**/*"
+  - "node_modules/typescript/**/*"
+  - "node_modules/vscode-jsonrpc/**/*"
+  - "node_modules/vscode-languageserver-protocol/**/*"
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  # Hardened runtime requires a real Developer ID signature. On an ad-hoc
+  # signed bundle it can cause macOS to disregard Info.plist privacy keys
+  # (Local Network never prompts) and silently drop capability requests.
+  # Once we have a signing identity, flip this back to true.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+  extendInfo:
+    # macOS Sequoia (15) silently drops unicast traffic to local-network IPs
+    # (192.168.x.x / 10.x.x.x / 172.16-31.x.x) for apps that don't declare
+    # local-network usage. Without these keys, connecting to LAN DBs from a
+    # Finder-launched .app returns EHOSTUNREACH even when the host is up.
+    NSLocalNetworkUsageDescription: "openDev connects to development services (databases, dev servers) running on your local network."
+    NSBonjourServices:
+      - _http._tcp
+      - _https._tcp
+      - _postgresql._tcp
+      - _mysql._tcp
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+publish: null

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+.DS_Store
+*.tsbuildinfo
+.env
+.env.local
+.vite/
+.claude/local/
+
+# Local design / planning docs — kept locally, not published
+docs/

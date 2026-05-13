@@ -1,0 +1,593 @@
+import { useEffect, useRef, useState } from 'react';
+import { useStore } from './state/store';
+import { FileTree } from './components/FileTree';
+import { CodeEditor } from './components/Editor';
+import { TerminalView } from './components/Terminal';
+import { FuzzyFinder } from './components/FuzzyFinder';
+import { FindInFiles } from './components/FindInFiles';
+import { Resizer } from './components/Resizer';
+import { Welcome } from './components/Welcome';
+import { Settings, applyAppearanceSettings } from './components/Settings';
+import { InstallNodePrompt } from './components/InstallNodePrompt';
+import { ServicesPanel } from './panels/ServicesPanel';
+import { AIChat } from './panels/AIChat';
+import { ConversationsList } from './panels/ConversationsList';
+import { LogPanel } from './panels/LogPanel';
+import { BrowserPanel } from './panels/BrowserPanel';
+import { DiffWorkspace } from './panels/DiffWorkspace';
+import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
+import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
+import { DbConnectionsPanel } from './panels/DbConnectionsPanel';
+import { SqlWorkspace } from './panels/SqlWorkspace';
+import { EsWorkspace } from './panels/EsWorkspace';
+
+export default function App() {
+  const [root, setRoot] = useState<string | undefined>();
+  const setWorkspaceRoot = useStore(s => s.setWorkspaceRoot);
+  const tabs = useStore(s => s.centerTabs);
+  const activeId = useStore(s => s.activeCenterId);
+  const openFile = useStore(s => s.openFileTab);
+  const openTerm = useStore(s => s.openTerminalTab);
+  const closeTab = useStore(s => s.closeCenterTab);
+  const setActive = useStore(s => s.setActiveCenterTab);
+  const updateContent = useStore(s => s.updateFileContent);
+  const markSaved = useStore(s => s.markFileSaved);
+  const renameCenterTab = useStore(s => s.renameCenterTab);
+  const [tabCtx, setTabCtx] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [renamingTabId, setRenamingTabId] = useState<string | undefined>();
+  const [renameDraft, setRenameDraft] = useState('');
+  const modal = useStore(s => s.modal);
+  const setModal = useStore(s => s.setModal);
+  const rightTab = useStore(s => s.rightTab);
+  const setRightTab = useStore(s => s.setRightTab);
+  const openSqlTab = useStore(s => s.openSqlTab);
+  const openEsTab = useStore(s => s.openEsTab);
+  const toast = useStore(s => s.toast);
+  const layout = useStore(s => s.layout);
+  const setLayout = useStore(s => s.setLayout);
+  const [showSettings, setShowSettings] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<{ hasBrew: boolean } | null>(null);
+  const tabDragRef = useRef<{ id: string; path: string; startX: number; startY: number; outside: boolean } | null>(null);
+
+  // Track when a drag leaves/enters the IDE window. `dragleave` on the
+  // document with `relatedTarget === null` is the Chromium signal that the
+  // cursor has crossed the window edge entirely.
+  useEffect(() => {
+    const onLeave = (e: DragEvent) => {
+      if (e.relatedTarget == null && tabDragRef.current) {
+        tabDragRef.current.outside = true;
+      }
+    };
+    const onEnter = () => { if (tabDragRef.current) tabDragRef.current.outside = false; };
+    document.addEventListener('dragleave', onLeave, true);
+    document.addEventListener('dragenter', onEnter, true);
+    return () => {
+      document.removeEventListener('dragleave', onLeave, true);
+      document.removeEventListener('dragenter', onEnter, true);
+    };
+  }, []);
+
+  // Detect missing Node/npm when a workspace becomes active — services
+  // won't be able to start without it, so offer to install via Homebrew.
+  useEffect(() => {
+    if (!root) return;
+    let alive = true;
+    (async () => {
+      const r = await window.opendev.tools.check();
+      if (alive && !r.npm) setInstallPrompt({ hasBrew: r.brew });
+    })();
+    return () => { alive = false; };
+  }, [root]);
+
+  useEffect(() => {
+    (async () => {
+      const r = await window.opendev.workspace.current();
+      setRoot(r); setWorkspaceRoot(r);
+    })();
+    const off = window.opendev.workspace.onChanged((p) => { setRoot(p); setWorkspaceRoot(p); });
+    return off;
+  }, [setWorkspaceRoot]);
+
+  // Surface main-process memory pressure as a toast. Only fires when the
+  // watchdog flips state (not on every sample) so it stays unobtrusive.
+  useEffect(() => {
+    const sys = (window.opendev as any).system;
+    if (!sys?.onMemoryWarning) return;
+    return sys.onMemoryWarning((m: { level: 'ok' | 'warn' | 'critical'; message: string }) => {
+      if (m.level === 'ok' || !m.message) return;
+      useStore.getState().showToast(m.message, m.level === 'critical' ? 8000 : 4000);
+    });
+  }, []);
+
+  // Session restore: when a workspace becomes active, load tabs/cursor/etc.
+  // from <workspace>/.opendev/session.json. Only restores if there's no tab
+  // already open (avoids clobbering during fast-switch).
+  const sessionLoadedFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!root) return;
+    if (sessionLoadedFor.current === root) return;
+    sessionLoadedFor.current = root;
+    (async () => {
+      const s = await window.opendev.session.load();
+      if (!s) return;
+      // Only restore if the current tab list is empty — never overwrite live state.
+      if (useStore.getState().centerTabs.length > 0) return;
+      for (const t of s.tabs || []) {
+        if (t.kind === 'file' && t.path) {
+          try { const content = await window.opendev.fs.read(t.path); useStore.getState().openFileTab(t.path, content); }
+          catch {}
+        } else if (t.kind === 'terminal') {
+          useStore.getState().openTerminalTab({ cwd: t.cwd, name: t.name });
+        } else if (t.kind === 'browser' && t.url) {
+          useStore.getState().openBrowserTab(t.url, t.name);
+        } else if (t.kind === 'sql') {
+          useStore.getState().openSqlTab();
+        } else if (t.kind === 'es') {
+          useStore.getState().openEsTab();
+        } else if (t.kind === 'ai') {
+          useStore.getState().openAiChatTab({ conversationId: t.conversationId, name: t.name });
+        }
+      }
+      // Validate the restored tab against the current set; fall back to
+      // 'ai' if the saved value is from a previous layout.
+      const validTabs = ['ai', 'db', 'es', 'log'] as const;
+      const restoredTab = validTabs.includes(s.rightTab as any) ? s.rightTab : 'ai';
+      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'log');
+      if (s.sqlConnId) useStore.getState().setSqlConnId(s.sqlConnId);
+      if (s.sqlText) useStore.getState().setSqlText(s.sqlText);
+      if (s.esText) useStore.getState().setEsText(s.esText);
+      if (s.activeIndex != null) {
+        const tabs = useStore.getState().centerTabs;
+        const target = tabs[s.activeIndex];
+        if (target) useStore.getState().setActiveCenterTab(target.id);
+      }
+    })();
+  }, [root]);
+
+  // Session save: debounce writes whenever interesting state changes.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!root) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const state = useStore.getState();
+      const tabs = state.centerTabs.flatMap(t => {
+        if (t.kind === 'file') return [{ kind: 'file', path: t.path }];
+        if (t.kind === 'terminal') return [{ kind: 'terminal', name: t.name, cwd: t.cwd }];
+        if (t.kind === 'browser') return [{ kind: 'browser', name: t.name, url: t.url }];
+        if (t.kind === 'ai') return [{ kind: 'ai', name: t.name, conversationId: t.conversationId }];
+        // design-proposals are ephemeral previews — don't persist them.
+        if (t.kind === 'design-proposals') return [];
+        return [{ kind: t.kind, name: t.name }];
+      });
+      const activeIndex = state.activeCenterId ? state.centerTabs.findIndex(t => t.id === state.activeCenterId) : -1;
+      const session = {
+        tabs,
+        activeIndex: activeIndex >= 0 ? activeIndex : undefined,
+        rightTab: state.rightTab,
+        sqlConnId: state.sqlConnId,
+        sqlText: state.sqlText,
+        esText: state.esText
+      };
+      window.opendev.session.save(session).catch(() => {});
+    }, 600);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    // We only need to react to changes the user can make to the workspace shape.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, tabs, activeId, rightTab]);
+
+  useEffect(() => {
+    const name = root ? (root.split('/').filter(Boolean).pop() || 'openDev') : 'openDev';
+    document.title = name;
+  }, [root]);
+
+  // Apply persisted appearance settings at startup
+  useEffect(() => {
+    window.opendev.settings.get().then(applyAppearanceSettings);
+  }, []);
+
+  // Pick the right center workspace based on which right-panel tab is open.
+  useEffect(() => {
+    if (rightTab === 'db') openSqlTab();
+    else if (rightTab === 'es') openEsTab();
+  }, [rightTab, openSqlTab, openEsTab]);
+
+  // Listen for native menu events
+  useEffect(() => {
+    const off = window.opendev.menu.onEvent(async (action) => {
+      if (action === 'open-project') {
+        const r = await window.opendev.workspace.pick();
+        if (r) { setRoot(r); setWorkspaceRoot(r); }
+      } else if (action === 'close-project') {
+        await window.opendev.workspace.close();
+        setRoot(undefined); setWorkspaceRoot(undefined);
+      } else if (action === 'settings') {
+        setShowSettings(true);
+      }
+    });
+    return off;
+  }, [setWorkspaceRoot]);
+
+  useEffect(() => {
+    const dismiss = () => setTabCtx(null);
+    window.addEventListener('click', dismiss);
+    return () => window.removeEventListener('click', dismiss);
+  }, []);
+
+  // Push an editor-state snapshot to the main process so the MCP server can
+  // answer "what is the user looking at right now" without a renderer
+  // roundtrip. Snapshot whenever tabs/active change.
+  useEffect(() => {
+    const active = tabs.find(t => t.id === activeId);
+    const snap = {
+      workspaceRoot: root,
+      activeTab: active ? { id: active.id, kind: active.kind, name: active.name, path: active.kind === 'file' ? active.path : undefined } : null,
+      openTabs: tabs.map(t => ({
+        id: t.id, kind: t.kind, name: t.name,
+        path: t.kind === 'file' ? t.path : undefined,
+        modified: t.kind === 'file' ? t.modified : undefined
+      })),
+      activeFileContent: active && active.kind === 'file' ? (active.dirtyContent ?? active.content) : undefined
+    };
+    try { window.opendev.mcp.pushEditorSnapshot(snap); } catch {}
+  }, [tabs, activeId, root]);
+
+  // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
+  useEffect(() => {
+    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number }) => {
+      if (cmd?.kind === 'open-file' && cmd.path) {
+        openFileFromPath(cmd.path).then(() => {
+          if (cmd.line != null) setPendingJump({ path: cmd.path!, line: cmd.line, col: cmd.col ?? 0 });
+        });
+      }
+    };
+    const off = (window.opendev as any).mcp?.onCommand?.(handler);
+    return () => { try { off && off(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const cmd = e.metaKey || e.ctrlKey;
+      if (cmd && e.key.toLowerCase() === 'p' && e.shiftKey) { e.preventDefault(); setModal('fuzzy'); }
+      else if (cmd && e.key.toLowerCase() === 'p') { e.preventDefault(); setModal('fuzzy'); }
+      else if (cmd && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setModal('find'); }
+      else if (cmd && e.key === '`') { e.preventDefault(); openTerm(); }
+      else if (cmd && e.key === 'o' && e.shiftKey) { e.preventDefault(); setModal('fuzzy'); }
+      else if (e.key === 'Escape' && modal) { setModal(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modal, openTerm, setModal]);
+
+  const pickWorkspace = async () => {
+    const r = await window.opendev.workspace.pick();
+    if (r) { setRoot(r); setWorkspaceRoot(r); }
+  };
+  const openPath = async (p: string) => {
+    const r = await window.opendev.workspace.open(p);
+    if (r) { setRoot(r); setWorkspaceRoot(r); }
+  };
+
+  const openFileFromPath = async (path: string) => {
+    try { const content = await window.opendev.fs.read(path); openFile(path, content); }
+    catch (e: any) { console.error(e); }
+  };
+
+  const setPendingJump = useStore(s => s.setPendingJump);
+  const references = useStore(s => s.references);
+  const setReferences = useStore(s => s.setReferences);
+  const jumpTo = async (path: string, line: number, col: number) => {
+    const already = tabs.find(t => t.kind === 'file' && t.path === path);
+    if (!already) {
+      try {
+        const content = await window.opendev.fs.read(path);
+        openFile(path, content);
+      } catch (e: any) {
+        console.error('jumpTo failed to read', path, e);
+        return;
+      }
+    } else {
+      setActive(already.id);
+    }
+    setPendingJump({ path, line, col });
+  };
+
+  const active = tabs.find(t => t.id === activeId);
+
+  if (!root) {
+    return (
+      <div className="app" style={{ gridTemplateRows: '36px 1fr' }}>
+        <div className="titlebar">
+          <span className="title">openDev</span>
+          <span className="path">v{window.opendev.app.version()} · (no workspace open)</span>
+          <div className="actions">
+            <button onClick={() => setShowSettings(true)}>Settings</button>
+          </div>
+        </div>
+        <Welcome onOpen={openPath} onPick={pickWorkspace} />
+        {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {installPrompt && (
+        <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
+      )}
+        {toast && <div className="toast">{toast}</div>}
+      </div>
+    );
+  }
+
+  const projectName = root.split('/').filter(Boolean).pop() || 'project';
+  const projectParent = root.split('/').slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
+
+  return (
+    <div className="app">
+      <div className="titlebar">
+        <span className="title">{projectName}</span>
+        <span className="path">{projectParent} · v{window.opendev.app.version()}</span>
+      </div>
+
+      <div className="workspace">
+        {/* LEFT: Project tree on top, Services on bottom */}
+        <div className="col-left" style={{ width: layout.leftW, flex: `0 0 ${layout.leftW}px`, display: 'flex', flexDirection: 'column' }}>
+          <div className="panel left-files" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <div className="panel-header">
+              <span>Project</span>
+              <span className="grow" />
+              <button className="icon" title="Refresh file tree" onClick={() => window.dispatchEvent(new Event('opendev:filetree-refresh'))}>↻</button>
+            </div>
+            <div className="panel-body" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <FileTree root={root} onOpen={openFileFromPath} />
+            </div>
+          </div>
+
+          <Resizer orientation="horizontal" value={layout.servicesH} min={120} max={900}
+            onChange={(v) => setLayout({ servicesH: v })} invert />
+
+          <div className="left-services" style={{ height: layout.servicesH, flex: `0 0 ${layout.servicesH}px`, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <ServicesPanel />
+          </div>
+        </div>
+
+        <Resizer orientation="vertical" value={layout.leftW} min={180} max={600}
+          onChange={(v) => setLayout({ leftW: v })} />
+
+        <div className="col-center">
+          <div className="center-editor">
+            <div className="tabs">
+              {tabs.map(t => {
+                const icon = t.kind === 'terminal' ? '⌨ ' : t.kind === 'browser' ? '🌐 ' : t.kind === 'sql' ? '⚡ ' : t.kind === 'es' ? '🔍 ' : t.kind === 'diff' ? '⇄ ' : t.kind === 'ai-task' ? '✦ ' : t.kind === 'ai' ? '🤖 ' : t.kind === 'design-proposals' ? '◫ ' : '';
+                const isRenaming = renamingTabId === t.id;
+                return (
+                  <div
+                    key={t.id}
+                    className={`tab ${activeId === t.id ? 'active' : ''}`}
+                    draggable={!isRenaming && t.kind === 'file'}
+                    onClick={() => !isRenaming && setActive(t.id)}
+                    onDragStart={(e) => {
+                      if (t.kind !== 'file') return;
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/uri-list', `file://${t.path}`);
+                      tabDragRef.current = { id: t.id, path: t.path, startX: e.screenX, startY: e.screenY, outside: false };
+                    }}
+                    onDragEnd={(e) => {
+                      if (t.kind !== 'file') return;
+                      const state = tabDragRef.current;
+                      tabDragRef.current = null;
+                      if (!state) return;
+                      const traveled = Math.hypot(
+                        (e.screenX || state.startX) - state.startX,
+                        (e.screenY || state.startY) - state.startY
+                      );
+                      // Tear off when the cursor actually left the window and
+                      // we moved more than a tiny twitch. The dragleave flag
+                      // is more reliable than coord math on Electron/macOS.
+                      const shouldTear = state.outside && traveled > 40;
+                      if (!shouldTear) return;
+                      const path = state.path;
+                      const id = state.id;
+                      // Defer so Electron finishes tearing down the drag image
+                      // before we spawn a window and unmount the editor.
+                      setTimeout(() => {
+                        try {
+                          window.opendev.window.popoutFile(path);
+                          closeTab(id);
+                        } catch (err) {
+                          console.error('popout failed', err);
+                        }
+                      }, 0);
+                    }}
+                    onDoubleClick={(e) => {
+                      if (t.kind === 'file') return;
+                      e.stopPropagation();
+                      setRenamingTabId(t.id); setRenameDraft(t.name);
+                    }}
+                    onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setTabCtx({ x: e.clientX, y: e.clientY, id: t.id }); }}
+                  >
+                    {isRenaming ? (
+                      <input
+                        autoFocus
+                        className="tab-rename"
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { renameCenterTab(t.id, renameDraft.trim() || t.name); setRenamingTabId(undefined); }
+                          else if (e.key === 'Escape') { setRenamingTabId(undefined); }
+                        }}
+                        onBlur={() => { renameCenterTab(t.id, renameDraft.trim() || t.name); setRenamingTabId(undefined); }}
+                      />
+                    ) : (
+                      <span>{icon}{t.name}</span>
+                    )}
+                    {t.kind === 'file' && t.modified ? <span className="modified">●</span> : null}
+                    {t.kind === 'file' && (
+                      <span
+                        className="tab-detach"
+                        title="Open in new window"
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const path = t.path;
+                          const id = t.id;
+                          window.opendev.window.popoutFile(path);
+                          closeTab(id);
+                        }}
+                      >⎘</span>
+                    )}
+                    <span
+                      className="close"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
+                    >×</span>
+                  </div>
+                );
+              })}
+              {tabs.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--fg-3)', fontSize: 11 }}>Cmd+P to find a file • Cmd+` for terminal</div>}
+            </div>
+            <div style={{ flex: 1, minHeight: 0, minWidth: 0, background: 'var(--bg-0)' }}>
+              {!active && (
+                <div className="empty-state">
+                  <h2>{root.split('/').filter(Boolean).pop()}</h2>
+                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{root}</p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setModal('fuzzy')}>Find File (⌘P)</button>
+                    <button onClick={() => openTerm()}>New Terminal (⌘`)</button>
+                  </div>
+                </div>
+              )}
+              {tabs.map(t => (
+                <div key={t.id} style={{ height: '100%', display: activeId === t.id ? 'block' : 'none' }}>
+                  {t.kind === 'file' && (
+                    <CodeEditor
+                      path={t.path}
+                      value={t.dirtyContent ?? t.content}
+                      onChange={(s) => updateContent(t.id, s)}
+                      onSave={async () => {
+                        await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
+                        markSaved(t.id);
+                      }}
+                      onJumpTo={jumpTo}
+                    />
+                  )}
+                  {t.kind === 'terminal' && <TerminalView cwd={t.cwd} />}
+                  {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} />}
+                  {t.kind === 'sql' && <SqlWorkspace />}
+                  {t.kind === 'es' && <EsWorkspace />}
+                  {t.kind === 'diff' && <DiffWorkspace filePath={t.filePath} hash={t.hash} diff={t.diff} />}
+                  {t.kind === 'ai-task' && <AiTaskWorkspace />}
+                  {t.kind === 'ai' && (
+                    <AIChat tabId={t.id} initialConversationId={t.conversationId} active={activeId === t.id} />
+                  )}
+                  {t.kind === 'design-proposals' && (
+                    <DesignProposalsWorkspace tabId={t.id} proposals={t.proposals} targetPath={t.targetPath} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: AI / DB / ES tabbed panel */}
+        <Resizer orientation="vertical" value={layout.rightW} min={220} max={600}
+          onChange={(v) => setLayout({ rightW: v })} invert />
+
+        <div className="col-right" style={{ width: layout.rightW, flex: `0 0 ${layout.rightW}px`, display: 'flex', flexDirection: 'column' }}>
+          <div className="right-tabs">
+            {[
+              ['ai', 'AI'],
+              ['db', 'DB'],
+              ['es', 'ES'],
+              ['log', 'LOG']
+            ].map(([k, label]) => (
+              <div key={k}
+                className={`right-tab ${rightTab === k ? 'active' : ''}`}
+                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'log')}>{label}</div>
+            ))}
+          </div>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'ai' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <ConversationsList />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'db' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <DbConnectionsPanel drivers={['mysql', 'postgres']} title="SQL Connections" />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'es' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <DbConnectionsPanel drivers={['elasticsearch']} title="ES / OpenSearch" />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'log' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <LogPanel />
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      {modal === 'fuzzy' && <FuzzyFinder />}
+      {modal === 'find' && <FindInFiles />}
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {installPrompt && (
+        <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
+      )}
+
+      {references && (
+        <div className="modal-overlay" onMouseDown={() => setReferences(undefined)}>
+          <div className="modal" style={{ width: 720 }} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-input" style={{ fontWeight: 600 }}>
+              References ({references.items.length})
+            </div>
+            <div className="modal-list">
+              {references.items.map((r, i) => {
+                const file = r.path.split('/').pop();
+                return (
+                  <div key={i} className="modal-row" onClick={() => {
+                    jumpTo(r.path, r.line, r.col);
+                    setReferences(undefined);
+                  }}>
+                    <span>{file}</span>
+                    <span className="relpath">{r.path} · L{r.line + 1}:{r.col + 1}</span>
+                  </div>
+                );
+              })}
+              {references.items.length === 0 && <div className="modal-row" style={{ color: 'var(--fg-3)' }}>No references found.</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tabCtx && (() => {
+        const t = tabs.find(x => x.id === tabCtx.id);
+        if (!t) return null;
+        const canRename = t.kind !== 'file';
+        const canPopout = t.kind === 'file';
+        return (
+          <div className="ctx-menu" style={{ left: tabCtx.x, top: tabCtx.y }} onClick={(e) => e.stopPropagation()}>
+            <div
+              className="item"
+              style={{ opacity: canRename ? 1 : 0.4 }}
+              onClick={() => {
+                if (!canRename) return;
+                setRenamingTabId(t.id); setRenameDraft(t.name); setTabCtx(null);
+              }}
+            >Rename…{canRename ? '' : ' (file tabs follow the file)'}</div>
+            {canPopout && (
+              <div className="item" onClick={() => {
+                if (t.kind === 'file') window.opendev.window.popoutFile(t.path);
+                setTabCtx(null);
+              }}>Open in New Window</div>
+            )}
+            <div className="sep" />
+            <div className="item" onClick={() => { closeTab(t.id); setTabCtx(null); }}>Close</div>
+            <div className="item" onClick={() => {
+              for (const o of tabs) if (o.id !== t.id) closeTab(o.id);
+              setTabCtx(null);
+            }}>Close Others</div>
+            <div className="item" onClick={() => { for (const o of tabs) closeTab(o.id); setTabCtx(null); }}>Close All</div>
+          </div>
+        );
+      })()}
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
