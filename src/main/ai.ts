@@ -320,9 +320,6 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
-    // TEMP DIAGNOSTIC: stream every debug category to stderr so we can see
-    // where claude blocks during startup. Remove once the hang is solved.
-    '-d', '*',
     // bypassPermissions = no per-tool approval prompts. The IDE chat is
     // already an opted-in surface, so we trust the model to write/edit
     // and surface the diff after.
@@ -350,13 +347,6 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     if (k === 'NODE_OPTIONS') continue;
     childEnv[k] = v;
   }
-  // Dump the env we hand to claude so the next bug repro shows exactly what
-  // the subprocess saw. Best-effort — never fail the spawn over this.
-  try {
-    void fs.writeFile('/tmp/opendev_claude_env.json', JSON.stringify({
-      claudeBin, cwd, pid: process.pid, ts: new Date().toISOString(), env: childEnv
-    }, null, 2));
-  } catch {}
   const proc = spawn(claudeBin, args, {
     cwd,
     env: childEnv,
@@ -480,8 +470,6 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     // can otherwise grow without bound.
     stderr = tail(stderr + t, LIMITS.aiStderrTailBytes);
     console.error('[claude cli stderr]', t.trimEnd());
-    // TEMP DIAGNOSTIC: also persist to /tmp so we can inspect after a kill.
-    try { fs.appendFile('/tmp/opendev_claude_stderr.log', t); } catch {}
     safeSend(IPC.AiStream, { streamId, chunk: `[stderr] ${t}`, done: false });
   });
 
@@ -513,19 +501,9 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   const idleWatchdog = setInterval(() => {
     if (Date.now() - lastChunkAt > IDLE_KILL_MS) {
       console.warn(`[claude cli] idle for ${IDLE_KILL_MS}ms — killing subprocess`);
-      // Forensic snapshot: write whatever stdout/stderr we DID see (often
-      // nothing — that's the point) so the next bug report can include it.
-      try {
-        void fs.writeFile('/tmp/opendev_claude_idlekill.log',
-          `idle-kill at ${new Date().toISOString()}\nbin=${claudeBin}\ncwd=${cwd}\n` +
-          `--- stdoutBuf (${stdoutBuf.length} bytes) ---\n${stdoutBuf}\n` +
-          `--- acc (${acc.length} bytes) ---\n${acc}\n` +
-          `--- stderr (${stderr.length} bytes) ---\n${stderr}\n`);
-      } catch {}
       safeSend(IPC.AiStream, {
         streamId,
-        chunk: `\n[no output for ${Math.round(IDLE_KILL_MS / 1000)}s — killing subprocess so you can try again]\n` +
-          `(env + raw buffers dumped to /tmp/opendev_claude_env.json and /tmp/opendev_claude_idlekill.log)\n`,
+        chunk: `\n[no output for ${Math.round(IDLE_KILL_MS / 1000)}s — killing subprocess so you can try again]\n`,
         done: false
       });
       killReason = 'idle-watchdog';
