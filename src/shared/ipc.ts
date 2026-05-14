@@ -117,6 +117,25 @@ export const IPC = {
   SettingsGet: 'settings:get',
   SettingsSet: 'settings:set',
 
+  // ai agents
+  AgentsList: 'agents:list',
+  AgentsCreate: 'agents:create',
+  AgentsImport: 'agents:import',
+  AgentsImportPick: 'agents:import-pick',
+  AgentsRun: 'agents:run',
+  AgentsStop: 'agents:stop',
+  AgentsDelete: 'agents:delete',
+  AgentStream: 'agents:stream',     // main → renderer
+  AgentsChanged: 'agents:changed',  // main → renderer
+
+  // lan peers
+  PeersList: 'peers:list',
+  PeersStatus: 'peers:status',
+  PeersSetLinkKey: 'peers:set-link-key',
+  PeersSetEnabled: 'peers:set-enabled',
+  PeersPushRepo: 'peers:push-repo',
+  PeersChanged: 'peers:changed',    // main → renderer
+
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning'
 } as const;

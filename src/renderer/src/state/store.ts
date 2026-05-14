@@ -30,8 +30,9 @@ export type CenterTab =
   | { kind: 'es'; id: string; name: string }
   | { kind: 'diff'; id: string; name: string; filePath: string; hash?: string; diff: string }
   | { kind: 'ai-task'; id: string; name: string }
-  | { kind: 'ai'; id: string; name: string; conversationId?: string }
-  | { kind: 'design-proposals'; id: string; name: string; proposals: DesignProposal[]; targetPath?: string };
+  | { kind: 'ai'; id: string; name: string; conversationId?: string; initialPrompt?: string }
+  | { kind: 'design-proposals'; id: string; name: string; proposals: DesignProposal[]; targetPath?: string }
+  | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string };
 
 export type BottomTabKey = 'terminal' | 'problems' | 'ports' | 'tasks' | 'browser' | 'search';
 export type RightTabKey = 'ai' | 'db' | 'es' | 'log';
@@ -59,9 +60,10 @@ type Store = {
   openEsTab: () => void;
   openDiffTab: (opts: { filePath: string; hash?: string; diff: string }) => void;
   openAiTaskTab: (opts?: { goal?: string; priorities?: string[] }) => void;
-  openAiChatTab: (opts?: { conversationId?: string; name?: string; focusIfOpen?: boolean }) => string;
+  openAiChatTab: (opts?: { conversationId?: string; name?: string; focusIfOpen?: boolean; initialPrompt?: string }) => string;
   setAiTabConversation: (tabId: string, conversationId: string, name?: string) => void;
   openDesignProposalsTab: (opts: { proposals: DesignProposal[]; targetPath?: string; name?: string }) => string;
+  openAgentRunTab: (opts: { runId: string; agentSlug: string; name: string; target?: string }) => string;
   aiTaskGoal: string;
   aiTaskPriorities: string[];
   aiTaskOutput: string;
@@ -121,7 +123,7 @@ type Store = {
   toast?: string;
   showToast: (msg: string, ms?: number) => void;
 
-  layout: { leftW: number; rightW: number; bottomH: number; servicesH: number; sqlSplit: number };
+  layout: { leftW: number; rightW: number; bottomH: number; servicesH: number; sqlSplit: number; agentsH: number };
   setLayout: (patch: Partial<Store['layout']>) => void;
 
   pendingServiceDraft?: { name: string; command: string; cwd: string };
@@ -156,9 +158,9 @@ const LAYOUT_KEY = 'opendev:layout:v1';
 function readLayout(): Store['layout'] {
   try {
     const s = localStorage.getItem(LAYOUT_KEY);
-    if (s) return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, ...JSON.parse(s) };
+    if (s) return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, ...JSON.parse(s) };
   } catch {}
-  return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240 };
+  return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220 };
 }
 function writeLayout(l: Store['layout']) {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)); } catch {}
@@ -243,7 +245,7 @@ export const useStore = create<Store>((set, get) => ({
     const id = nextTabId();
     const aiCount = state.centerTabs.filter(t => t.kind === 'ai').length;
     const name = opts?.name || (opts?.conversationId ? 'Chat' : `New chat${aiCount > 0 ? ` ${aiCount + 1}` : ''}`);
-    const tab: CenterTab = { kind: 'ai', id, name, conversationId: opts?.conversationId };
+    const tab: CenterTab = { kind: 'ai', id, name, conversationId: opts?.conversationId, initialPrompt: opts?.initialPrompt };
     set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
     return id;
   },
@@ -257,6 +259,16 @@ export const useStore = create<Store>((set, get) => ({
     const id = nextTabId();
     const name = opts.name || (opts.targetPath ? `Designs · ${opts.targetPath.split('/').pop()}` : 'Designs');
     const tab: CenterTab = { kind: 'design-proposals', id, name, proposals: opts.proposals, targetPath: opts.targetPath };
+    set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
+    return id;
+  },
+  openAgentRunTab: (opts) => {
+    // Always a fresh tab — each Run is its own output surface.
+    const id = nextTabId();
+    const tab: CenterTab = {
+      kind: 'agent-run', id, name: opts.name,
+      runId: opts.runId, agentSlug: opts.agentSlug, target: opts.target ?? 'local'
+    };
     set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
     return id;
   },

@@ -427,7 +427,7 @@ async function testProfile(profile: DbConnectionProfile & { password?: string })
         lines.push(`   open '/Applications/openDev.app'`);
         lines.push(`If that still fails:`);
         lines.push(`   tccutil reset LocalNetwork com.opendev.ide`);
-        lines.push(`then relaunch. System Settings → Privacy & Security → Local Network should now list openDev; turn it on.`);
+        lines.push(`then relaunch. System Settings → Privacy & Security → Local Network should now list OpenDev IDE; turn it on.`);
       } else if (!allNcOk && !sockOk) {
         lines.push(`Neither nc nor Node sockets reach ${profile.host}:${profile.port}. This is a real network problem (VPN, VLAN, firewall) — not an IDE permission.`);
       } else if (isLan && process.platform === 'darwin') {

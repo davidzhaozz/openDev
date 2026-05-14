@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron';
+import { ipcMain, app } from 'electron';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
 import type { GitFileStatus, WorktreeInfo } from '@shared/types';
@@ -17,6 +18,39 @@ function git(): SimpleGit {
     gitRoot = root;
   }
   return gitInstance;
+}
+
+// Bundle the whole repo (all refs) into a single file we can ship to a peer
+// over HTTP. Returns the bundle's absolute path in a temp dir; the caller
+// is responsible for deleting it after sending.
+export async function bundleRepo(root: string): Promise<string> {
+  const out = join(tmpdir(), `opendev-bundle-${randomUUID()}.bundle`);
+  await simpleGit(root).raw(['bundle', 'create', out, '--all']);
+  return out;
+}
+
+// Clone (or update) a repo on the receiving peer from a bundle file. If the
+// target already exists, fetch from the bundle and hard-reset to its HEAD so
+// repeated pushes stay in sync; otherwise clone fresh.
+export async function applyBundle(bundlePath: string, targetDir: string): Promise<void> {
+  let exists = false;
+  try { await fs.access(join(targetDir, '.git')); exists = true; } catch {}
+  if (exists) {
+    const g = simpleGit(targetDir);
+    await g.raw(['fetch', bundlePath, '+refs/heads/*:refs/heads/*', '--force']);
+    // Move the working tree to whatever the bundle's default branch HEAD is.
+    const head = (await simpleGit(targetDir).raw(['rev-parse', 'HEAD'])).trim();
+    await g.raw(['reset', '--hard', head]);
+  } else {
+    await fs.mkdir(targetDir, { recursive: true });
+    await simpleGit().raw(['clone', bundlePath, targetDir]);
+  }
+}
+
+// Where a peer stores repos pushed to it: <appData>/openDev/peer-repos/<name>.
+export function peerRepoDir(workspaceName: string): string {
+  const safe = workspaceName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'repo';
+  return join(app.getPath('appData'), 'openDev', 'peer-repos', safe);
 }
 
 function mapStatus(idx: string, wt: string): GitFileStatus['status'] {

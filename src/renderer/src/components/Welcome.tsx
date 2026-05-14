@@ -27,7 +27,7 @@ export function Welcome({ onOpen, onPick }: Props) {
       <div className="welcome-card">
         <div className="welcome-header">
           <div className="welcome-title">
-            openDev
+            OpenDev IDE
             <span className="welcome-version">v{window.opendev.app.version()}</span>
           </div>
           <div className="welcome-sub">Choose a project to get started</div>

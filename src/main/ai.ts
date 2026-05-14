@@ -56,7 +56,7 @@ function convPath(id: string): string { return join(convDir(), `${id}.json`); }
 // `hydrateShellPath` (called at startup) can silently fail on weird shell
 // setups — surfacing "not found" with the PATH we searched is far more
 // useful than ENOENT bubbling up as "[claude cli exited -2]".
-function resolveBinPath(nameOrPath: string): string | null {
+export function resolveBinPath(nameOrPath: string): string | null {
   // Already absolute — trust it (let spawn surface any access errors).
   if (nameOrPath.startsWith('/')) return existsSync(nameOrPath) ? nameOrPath : null;
   const home = process.env.HOME || '';
@@ -133,7 +133,7 @@ function buildIdeContextBlock(ctx: IdeContext | undefined): string {
 // about the IDE-specific affordances (design proposals tab, follow-up Q&A).
 // On `--resume` turns we skip this; the model already has them in context.
 const IDE_SYSTEM_INSTRUCTIONS = `<ide-instructions>
-You are running inside openDev. A few IDE-specific conventions:
+You are running inside OpenDev IDE. A few IDE-specific conventions:
 
 1. ASKING THE USER QUESTIONS
    ⚠️ DO NOT use the AskUserQuestion tool — it is disallowed in this
@@ -206,6 +206,42 @@ You are running inside openDev. A few IDE-specific conventions:
 
    After the user picks, you will receive a follow-up message like
    "I chose Bold. Please apply it to <path>." — then write the real files.
+
+4. AUTHORING AI AGENTS
+   An "AI Agent" is a self-contained Node.js application that runs against
+   the workspace codebase (e.g. a test runner, a code-graph analyzer). When
+   the user asks you to "create an agent" / "make a <kind> agent", just WRITE
+   THE FILES — there is no registration step; the IDE watches the agents
+   folder and the new agent appears in the bottom-right "AI Agents" panel
+   automatically.
+
+   Layout — create a folder at \`.opendev/agents/<slug>/\` (slug = kebab-case)
+   containing:
+   a) \`agent.json\` — the manifest:
+      {
+        "slug": "<slug>",
+        "name": "<human label>",
+        "description": "<one line>",
+        "entry": "index.js",        // path relative to this folder
+        "runtime": "node",          // "node" for .js/.mjs, "tsx" for .ts
+        "createdBy": "ai",
+        "createdAt": <Date.now()>
+      }
+   b) the entry file (and any other source / bundled npm deps).
+
+   Runtime contract for the entry file:
+   - It runs with cwd = the workspace root (the codebase under analysis).
+   - \`process.env.OPENDEV_WORKSPACE_ROOT\` = absolute path to the codebase.
+   - \`process.env.OPENDEV_AGENT_DIR\` = absolute path to the agent's own folder
+     (use it to locate bundled files / node_modules).
+   - Write results to stdout. If the FIRST thing printed is a complete HTML
+     document (starts with \`<!doctype html>\` or \`<html>\`), the IDE renders it
+     in a sandboxed iframe in a center tab — good for a graph/visualization.
+     Otherwise stdout streams as a plain text log. stderr is also streamed.
+   - Prefer \`runtime: "node"\` with plain \`.js\`/\`.mjs\`; only use \`runtime: "tsx"\`
+     if the user explicitly wants TypeScript (it requires \`tsx\` installed).
+   - Bundle npm dependencies inside the agent folder; do not assume a later
+     \`npm install\` step.
 </ide-instructions>`;
 
 function buildPrompt(messages: ChatMessage[], attachments: ChatAttachment[] | undefined, userText: string, ideCtx?: IdeContext, includeSystemInstructions?: boolean): string {
@@ -253,7 +289,7 @@ async function streamViaClaudeSdk(streamId: string, text: string, conv: Conversa
   const client = new Anthropic({ apiKey });
   const abort = new AbortController();
   activeStreams.set(streamId, abort);
-  const sysPrompt = `You are the assistant inside openDev. Project root: ${workspace.getRoot() ?? '(none)'}. Be concise.`;
+  const sysPrompt = `You are the assistant inside OpenDev IDE. Project root: ${workspace.getRoot() ?? '(none)'}. Be concise.`;
 
   const messages = conv.messages
     .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -567,7 +603,7 @@ async function streamViaOpenAiSdk(streamId: string, text: string, conv: Conversa
   const client = new OpenAI({ apiKey });
   const abort = new AbortController();
   activeStreams.set(streamId, abort);
-  const sysPrompt = `You are the assistant inside openDev. Project root: ${workspace.getRoot() ?? '(none)'}. Be concise.`;
+  const sysPrompt = `You are the assistant inside OpenDev IDE. Project root: ${workspace.getRoot() ?? '(none)'}. Be concise.`;
 
   // OpenAI uses a "messages" array with role+content. Multimodal content can
   // be sent as an array of parts; we use text-only for simplicity but include

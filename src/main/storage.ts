@@ -1,7 +1,8 @@
 import { app } from 'electron';
 import { promises as fs } from 'fs';
+import { hostname } from 'os';
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { AppSettings } from '@shared/types';
 
 let baseDir = '';
@@ -58,4 +59,23 @@ export async function patchSettings(patch: Partial<AppSettings>): Promise<AppSet
   const next = { ...s, ...patch };
   await saveSettings(next);
   return next;
+}
+
+// Stable per-install machine identity for LAN linking (see peers.ts). Lives
+// in a plain `machine-id` file in the app data dir; created on first read.
+let cachedMachineId: string | null = null;
+export async function getMachineId(): Promise<string> {
+  if (cachedMachineId) return cachedMachineId;
+  const idFile = join(baseDir, 'machine-id');
+  try {
+    cachedMachineId = (await fs.readFile(idFile, 'utf8')).trim();
+    if (cachedMachineId) return cachedMachineId;
+  } catch { /* not created yet */ }
+  cachedMachineId = randomUUID();
+  await fs.writeFile(idFile, cachedMachineId, 'utf8');
+  return cachedMachineId;
+}
+
+export function getMachineName(): string {
+  return hostname();
 }

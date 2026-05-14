@@ -178,4 +178,73 @@ export type AppSettings = {
   editorFontFamily?: string;    // CSS font-family list for editor/terminal (monospace)
   windowOpacity?: number;       // 0..1 background opacity (1 = solid, 0.1 = mostly see-through). Text remains solid.
   fontColor?: string;           // hex for foreground text (UI + editor default)
+  // LAN machine-linking (see peers.ts). linkKey is the shared secret two
+  // machines must match to discover + trust each other; it is never sent
+  // on the wire in cleartext (only HMAC'd). Linking is opt-in.
+  linkKey?: string;
+  linkingEnabled?: boolean;
+};
+
+// ── AI Agents ──────────────────────────────────────────────────────────
+// An "agent" is a self-contained Node.js app stored per-workspace at
+// .opendev/agents/<slug>/ that operates on the workspace codebase.
+
+export type AgentRuntime = 'node' | 'tsx';
+export type AgentCreatedBy = 'ai' | 'import' | 'builtin';
+
+// .opendev/agents/<slug>/agent.json
+export type AgentManifest = {
+  slug: string;
+  name: string;
+  description: string;
+  entry: string;             // path relative to the agent folder, e.g. "index.js"
+  runtime: AgentRuntime;     // node => .js/.mjs ; tsx => .ts
+  createdBy: AgentCreatedBy;
+  createdAt: number;
+};
+
+// What agents.list() returns — the manifest plus the absolute folder path.
+export type AgentInfo = AgentManifest & { dir: string };
+
+export type AgentRunStatus = 'running' | 'stopped' | 'error';
+
+// 'local' runs in this process; any other string is a peerId (Milestone 3).
+export type AgentRunTarget = 'local' | string;
+
+export type AgentRun = {
+  runId: string;
+  agentSlug: string;
+  streamId: string;          // channel key the renderer filters AgentStream on
+  status: AgentRunStatus;
+  startedAt: number;
+  exitCode?: number;
+  target: AgentRunTarget;
+};
+
+// Stream event payload (main -> renderer) over IPC.AgentStream.
+export type AgentStreamMsg = {
+  streamId: string;
+  chunk?: string;            // stdout/stderr text
+  done?: boolean;            // process exited
+  status?: AgentRunStatus;   // sent with done
+  exitCode?: number;
+};
+
+// ── LAN peers ──────────────────────────────────────────────────────────
+
+export type PeerInfo = {
+  machineId: string;
+  name: string;
+  address: string;
+  httpPort: number;
+  lastSeen: number;
+  online: boolean;
+};
+
+export type PeersStatus = {
+  machineId: string;
+  machineName: string;
+  linkingEnabled: boolean;
+  hasLinkKey: boolean;
+  httpPort?: number;
 };

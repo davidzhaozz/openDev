@@ -60,7 +60,7 @@ export function InstallNodePrompt({ hasBrew, onDismiss }: { hasBrew: boolean; on
           )}
           {done && done.ok && (
             <div className="db-test-result ok" style={{ padding: 8 }}>
-              <strong>✓ Installed.</strong> You may need to restart openDev for the new PATH to take effect.
+              <strong>✓ Installed.</strong> You may need to restart OpenDev IDE for the new PATH to take effect.
             </div>
           )}
         </div>

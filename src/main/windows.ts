@@ -20,7 +20,7 @@ export function createPopoutWindow(path: string) {
     backgroundColor: '#00000000',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 14 },
-    title: path.split('/').pop() || 'openDev',
+    title: path.split('/').pop() || 'OpenDev IDE',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

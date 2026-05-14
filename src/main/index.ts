@@ -22,7 +22,7 @@ app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 // Force the runtime display name everywhere Electron asks (Cmd-Tab,
 // menu bar, default window title, permission prompts) instead of the
 // lowercased package.json `name`.
-app.setName('openDev');
+app.setName('OpenDev IDE');
 
 // Suppress Node deprecation / experimental warnings — these emit via process
 // warning handler, which then tries to write to stderr; if the pipe is closed
@@ -41,7 +41,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   if (err?.code === 'EPIPE' || err?.code === 'ERR_STREAM_DESTROYED') return;
   console.error('[uncaught]', err);
   try {
-    dialog.showErrorBox('openDev error', `${err?.message || err}\n\n${err?.stack || ''}`);
+    dialog.showErrorBox('OpenDev IDE error', `${err?.message || err}\n\n${err?.stack || ''}`);
   } catch {}
 });
 

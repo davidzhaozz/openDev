@@ -17,6 +17,8 @@ import { BrowserPanel } from './panels/BrowserPanel';
 import { DiffWorkspace } from './panels/DiffWorkspace';
 import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
+import { AgentsPanel } from './panels/AgentsPanel';
+import { AgentRunWorkspace } from './panels/AgentRunWorkspace';
 import { DbConnectionsPanel } from './panels/DbConnectionsPanel';
 import { SqlWorkspace } from './panels/SqlWorkspace';
 import { EsWorkspace } from './panels/EsWorkspace';
@@ -151,13 +153,14 @@ export default function App() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const state = useStore.getState();
-      const tabs = state.centerTabs.flatMap(t => {
+      type SessionTab = { kind: string; name?: string; path?: string; cwd?: string; url?: string; conversationId?: string };
+      const tabs = state.centerTabs.flatMap((t): SessionTab[] => {
         if (t.kind === 'file') return [{ kind: 'file', path: t.path }];
         if (t.kind === 'terminal') return [{ kind: 'terminal', name: t.name, cwd: t.cwd }];
         if (t.kind === 'browser') return [{ kind: 'browser', name: t.name, url: t.url }];
         if (t.kind === 'ai') return [{ kind: 'ai', name: t.name, conversationId: t.conversationId }];
-        // design-proposals are ephemeral previews — don't persist them.
-        if (t.kind === 'design-proposals') return [];
+        // design-proposals and agent-run are ephemeral — don't persist them.
+        if (t.kind === 'design-proposals' || t.kind === 'agent-run') return [];
         return [{ kind: t.kind, name: t.name }];
       });
       const activeIndex = state.activeCenterId ? state.centerTabs.findIndex(t => t.id === state.activeCenterId) : -1;
@@ -177,7 +180,7 @@ export default function App() {
   }, [root, tabs, activeId, rightTab]);
 
   useEffect(() => {
-    const name = root ? (root.split('/').filter(Boolean).pop() || 'openDev') : 'openDev';
+    const name = root ? (root.split('/').filter(Boolean).pop() || 'OpenDev IDE') : 'OpenDev IDE';
     document.title = name;
   }, [root]);
 
@@ -299,7 +302,7 @@ export default function App() {
     return (
       <div className="app" style={{ gridTemplateRows: '36px 1fr' }}>
         <div className="titlebar">
-          <span className="title">openDev</span>
+          <span className="title">OpenDev IDE</span>
           <span className="path">v{window.opendev.app.version()} · (no workspace open)</span>
           <div className="actions">
             <button onClick={() => setShowSettings(true)}>Settings</button>
@@ -477,10 +480,13 @@ export default function App() {
                   {t.kind === 'diff' && <DiffWorkspace filePath={t.filePath} hash={t.hash} diff={t.diff} />}
                   {t.kind === 'ai-task' && <AiTaskWorkspace />}
                   {t.kind === 'ai' && (
-                    <AIChat tabId={t.id} initialConversationId={t.conversationId} active={activeId === t.id} />
+                    <AIChat tabId={t.id} initialConversationId={t.conversationId} active={activeId === t.id} initialPrompt={t.initialPrompt} />
                   )}
                   {t.kind === 'design-proposals' && (
                     <DesignProposalsWorkspace tabId={t.id} proposals={t.proposals} targetPath={t.targetPath} />
+                  )}
+                  {t.kind === 'agent-run' && (
+                    <AgentRunWorkspace runId={t.runId} agentSlug={t.agentSlug} name={t.name} target={t.target} />
                   )}
                 </div>
               ))}
@@ -518,6 +524,12 @@ export default function App() {
             <div style={{ flex: 1, minHeight: 0, display: rightTab === 'log' ? 'flex' : 'none', flexDirection: 'column' }}>
               <LogPanel />
             </div>
+          </div>
+          {/* Bottom-of-right-column: AI Agents panel, vertically split off */}
+          <Resizer orientation="horizontal" value={layout.agentsH} min={120} max={600}
+            onChange={(v) => setLayout({ agentsH: v })} invert />
+          <div style={{ height: layout.agentsH, flex: `0 0 ${layout.agentsH}px`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <AgentsPanel />
           </div>
         </div>
 

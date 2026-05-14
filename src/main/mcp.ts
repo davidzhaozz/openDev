@@ -328,7 +328,7 @@ export async function startIdeMcpServer(): Promise<void> {
   await new Promise<void>((resolveP, rejectP) => {
     server!.once('error', (e: any) => {
       if (e?.code === 'EADDRINUSE') {
-        status = { running: false, error: `Port ${PORT} already in use — close any other openDev instance.` };
+        status = { running: false, error: `Port ${PORT} already in use — close any other OpenDev IDE instance.` };
         rejectP(e);
       } else rejectP(e);
     });

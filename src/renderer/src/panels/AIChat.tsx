@@ -44,13 +44,16 @@ type Props = {
   tabId: string;
   initialConversationId?: string;
   active?: boolean;
+  // When set, this prompt is auto-sent once on mount (e.g. the "+ New agent"
+  // flow opens a chat tab pre-loaded with the agent-authoring prompt).
+  initialPrompt?: string;
 };
 
 // Renders a single AI conversation. Designed to be instantiated per
 // center-tab so the user can have N concurrent sessions in parallel — each
 // component holds its own messages/streaming/convId state and filters the
 // global onStream events by its own streamId.
-export function AIChat({ tabId, initialConversationId, active }: Props) {
+export function AIChat({ tabId, initialConversationId, active, initialPrompt }: Props) {
   const [convId, setConvId] = useState<string | undefined>(initialConversationId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState('');
@@ -165,8 +168,11 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
     return () => window.removeEventListener('opendev:design-chosen', h);
   }, [active]);
 
-  const send = async () => {
-    if (!text.trim() && !attachments.length) return;
+  const send = async (override?: string) => {
+    // `override` lets callers (e.g. the auto-send of an initialPrompt) push
+    // a message without it first living in the composer's `text` state.
+    const body = override ?? text;
+    if (!body.trim() && !attachments.length) return;
     // If a previous stream is still running, cancel it first so the user
     // is never trapped waiting for a hung response. Their new message
     // becomes the next user turn in the (now-resumable) session.
@@ -178,7 +184,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
     const userMsg: ChatMessage = {
       id: `local-${Date.now()}`,
       role: 'user',
-      text,
+      text: body,
       attachments: attachments.length ? attachments : undefined,
       createdAt: Date.now()
     };
@@ -205,7 +211,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
         }))
       };
       inFlightProviderRef.current = transport === 'codex-cli' ? 'codex' : 'claude';
-      const r = await window.opendev.ai.send({ conversationId: convId, text, attachments, transport, context });
+      const r = await window.opendev.ai.send({ conversationId: convId, text: body, attachments, transport, context });
       streamIdRef.current = r.streamId;
       if (!convId) {
         setConvId(r.conversationId);
@@ -253,6 +259,17 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
     el.style.height = 'auto';
     el.style.height = Math.min(180, Math.max(44, el.scrollHeight)) + 'px';
   }, [text]);
+
+  // Auto-send an initialPrompt exactly once on a fresh tab (the "+ New agent"
+  // flow uses this to hand the agent-authoring prompt straight to the AI).
+  const initialPromptSent = useRef(false);
+  useEffect(() => {
+    if (initialPromptSent.current) return;
+    if (!initialPrompt || initialConversationId) return;
+    initialPromptSent.current = true;
+    void send(initialPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -408,7 +425,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
 
           <button
             className="composer-btn send"
-            onClick={send}
+            onClick={() => send()}
             // Always allow send — if a stream is running, send() will
             // cancel it first. Only block when there's nothing to send.
             disabled={!text.trim() && visibleAttachments.length === 0}

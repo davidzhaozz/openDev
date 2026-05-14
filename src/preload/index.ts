@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC } from '../shared/ipc.js';
 import type {
+  AgentInfo,
+  AgentRun,
+  AgentRunTarget,
+  AgentStreamMsg,
   AppSettings,
   ChatAttachment,
   Conversation,
@@ -14,6 +18,8 @@ import type {
   GitFileStatus,
   GrepHit,
   ListeningPort,
+  PeerInfo,
+  PeersStatus,
   ServiceDef,
   ServiceRuntime,
   TaskItem,
@@ -183,6 +189,27 @@ const api = {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SettingsGet),
     set: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke(IPC.SettingsSet, patch)
   },
+  agents: {
+    list: (): Promise<AgentInfo[]> => ipcRenderer.invoke(IPC.AgentsList),
+    create: (args: { name: string; description: string }): Promise<AgentInfo> =>
+      ipcRenderer.invoke(IPC.AgentsCreate, args),
+    importFrom: (srcPath: string): Promise<AgentInfo> => ipcRenderer.invoke(IPC.AgentsImport, srcPath),
+    importPick: (): Promise<AgentInfo | null> => ipcRenderer.invoke(IPC.AgentsImportPick),
+    run: (slug: string, target: AgentRunTarget = 'local'): Promise<AgentRun> =>
+      ipcRenderer.invoke(IPC.AgentsRun, { slug, target }),
+    stop: (runId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AgentsStop, runId),
+    delete: (slug: string): Promise<boolean> => ipcRenderer.invoke(IPC.AgentsDelete, slug),
+    onStream: (cb: (m: AgentStreamMsg) => void) => on(IPC.AgentStream, cb),
+    onChanged: (cb: () => void) => on(IPC.AgentsChanged, cb)
+  },
+  peers: {
+    list: (): Promise<PeerInfo[]> => ipcRenderer.invoke(IPC.PeersList),
+    status: (): Promise<PeersStatus> => ipcRenderer.invoke(IPC.PeersStatus),
+    setLinkKey: (key: string): Promise<boolean> => ipcRenderer.invoke(IPC.PeersSetLinkKey, key),
+    setEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke(IPC.PeersSetEnabled, enabled),
+    pushRepo: (peerId: string): Promise<boolean> => ipcRenderer.invoke(IPC.PeersPushRepo, peerId),
+    onChanged: (cb: () => void) => on(IPC.PeersChanged, cb)
+  },
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path)
   },
@@ -196,7 +223,7 @@ const api = {
   session: {
     save: (state: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SessionSave, state),
     load: (): Promise<{
-      tabs: Array<{ kind: string; path?: string; name?: string; cwd?: string; url?: string }>;
+      tabs: Array<{ kind: string; path?: string; name?: string; cwd?: string; url?: string; conversationId?: string }>;
       activeIndex?: number;
       rightTab?: 'ai' | 'db' | 'es';
       sqlConnId?: string;

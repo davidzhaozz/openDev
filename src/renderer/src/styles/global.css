@@ -2417,3 +2417,268 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 .log-resume-scroll:hover { filter: brightness(1.1); }
+
+/* ── AI Agents panel (bottom of right column) ──────────────────────── */
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.agents-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.agents-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.agents-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.agents-btn:hover { background: var(--bg-hover); }
+.agents-create {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.agents-create input,
+.agents-create-prompt {
+  font-size: 12px;
+  padding: 4px 6px;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.agents-create-prompt {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.45;
+  font-family: var(--font-ui);
+}
+.agents-create-actions { display: flex; gap: 6px; }
+.agents-create-actions button {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.agents-create-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent-hi);
+  color: #fff;
+}
+.agents-list { flex: 1; min-height: 0; overflow-y: auto; }
+.agents-empty {
+  padding: 12px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-row:hover { background: var(--bg-hover); }
+.agent-row-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.agent-row-name { font-size: 12px; font-weight: 600; color: var(--fg-0); display: flex; align-items: center; gap: 6px; }
+.agent-builtin-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(78, 201, 176, 0.16);
+  color: var(--ok);
+}
+.agent-row-desc {
+  font-size: 11px;
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-row-meta { font-size: 10px; color: var(--fg-3); font-family: var(--font-mono); }
+.agent-row-actions { display: flex; gap: 4px; align-items: center; }
+.agent-run-btn, .agent-stop, .agent-del {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.agent-run-btn { background: var(--accent); border-color: var(--accent-hi); color: #fff; }
+.agent-run-btn:hover { filter: brightness(1.12); }
+.agent-stop { background: var(--danger); border-color: var(--danger); color: #2a1410; }
+.agent-del { background: transparent; color: var(--fg-3); padding: 3px 6px; }
+.agent-del:hover { color: var(--danger); }
+
+/* ── Agent run output (center tab) ─────────────────────────────────── */
+.agent-run { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.agent-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+.agent-run-name { font-size: 12px; font-weight: 700; color: var(--fg-0); }
+.agent-run-slug { font-size: 10px; font-family: var(--font-mono); color: var(--fg-3); }
+.agent-run-target {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+.agent-run-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.agent-run-status.running { color: var(--accent-hi); background: rgba(17,119,187,0.12); }
+.agent-run-status.stopped { color: var(--fg-2); background: var(--bg-2); }
+.agent-run-status.error { color: var(--danger); background: rgba(244,135,113,0.1); }
+.agent-run-head button {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: #2a1410;
+  cursor: pointer;
+}
+.agent-run-body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-0);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-0);
+}
+.agent-run-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* ── AI Agents: machine-linking section ────────────────────────────── */
+.agents-btn.on { background: var(--accent); border-color: var(--accent-hi); color: #fff; }
+.agents-link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.agents-link-row { display: flex; align-items: center; gap: 6px; }
+.agents-link-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+  width: 78px;
+  flex-shrink: 0;
+}
+.agents-link-val { font-size: 11.5px; color: var(--fg-1); font-family: var(--font-mono); }
+.agents-link-key {
+  flex: 1;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+.agents-link-row button {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.agents-link-row button:disabled { opacity: 0.5; cursor: default; }
+.agents-link-toggle.on { background: var(--accent); border-color: var(--accent-hi); color: #fff; }
+.agents-link-hint { font-size: 10.5px; color: var(--fg-3); line-height: 1.4; }
+.agents-peers {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.agents-peers-empty { font-size: 11px; color: var(--fg-3); }
+.agents-peer { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.agents-peer-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  flex-shrink: 0;
+}
+.agents-peer-dot.on { background: var(--ok); }
+.agents-peer-name { color: var(--fg-0); font-weight: 600; }
+.agents-peer-addr { color: var(--fg-3); font-family: var(--font-mono); font-size: 10px; }
+
+/* ── AI Agents M3: target selector + peer push ─────────────────────── */
+.agent-target {
+  font-size: 10.5px;
+  padding: 2px 4px;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-width: 96px;
+}
+.agents-peer-push {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.agents-peer-push:hover { background: var(--bg-hover); }
+.agents-peer-push:disabled { opacity: 0.5; cursor: default; }
