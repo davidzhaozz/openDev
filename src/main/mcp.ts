@@ -26,6 +26,7 @@ import { workspace, safeWithinRoot } from './workspace.js';
 import { listDir, walkAllFiles } from './fs.js';
 import { listListeningPorts } from './ports.js';
 import { serviceManager } from './services.js';
+import { agentManager } from './agents.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
@@ -64,7 +65,9 @@ const TOOLS: ToolDef[] = [
   { name: 'ide_git_status', description: 'Run git status against a directory (defaults to the workspace root).', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
   { name: 'ide_git_diff', description: 'Run git diff against a directory.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, file: { type: 'string', description: 'Optional path to diff one file.' } } } },
   { name: 'ide_editor_state', description: 'Return the renderer-side editor state: active tab, all open tabs, optional selected text. May be stale by up to a few hundred milliseconds.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'ide_open_file', description: 'Open a file in the editor (creating a tab) and optionally place the cursor at a position.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path'] } }
+  { name: 'ide_open_file', description: 'Open a file in the editor (creating a tab) and optionally place the cursor at a position.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path'] } },
+  { name: 'ide_list_agents', description: 'List the AI agents available in this workspace — built-in agents (security-scan, code-quality, todo-collector, design-gallery) plus any the user created or imported. Returns each agent\'s slug, name, description, and runtime.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_run_agent', description: 'Run an AI agent by slug against the current workspace and return its full output once it finishes. Agents are self-contained Node.js apps; output is plain text or a complete HTML document. Use ide_list_agents first to see available slugs.', inputSchema: { type: 'object', properties: { slug: { type: 'string', description: 'The agent slug from ide_list_agents.' }, timeoutMs: { type: 'number', description: 'Max run time in ms (default 120000, max 600000).' } }, required: ['slug'] } }
 ];
 
 function resolveWorkspacePath(p: string | undefined): string {
@@ -248,6 +251,23 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
         if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
         dispatchToRenderer({ kind: 'open-file', path: p, line: args?.line, col: args?.col });
         return ok(`opening ${p}`);
+      }
+      case 'ide_list_agents': {
+        const agents = await agentManager.list();
+        return ok(agents.map(a => ({
+          slug: a.slug,
+          name: a.name,
+          description: a.description,
+          runtime: a.runtime,
+          builtIn: a.createdBy === 'builtin'
+        })));
+      }
+      case 'ide_run_agent': {
+        const slug = String(args?.slug ?? '');
+        if (!slug) throw new Error('slug required');
+        const r = await agentManager.runAndCollect(slug, { timeoutMs: Number(args?.timeoutMs) || undefined });
+        const header = `agent=${slug} exit=${r.exitCode}${r.timedOut ? ' (TIMEOUT)' : ''}`;
+        return ok(`${header}\n--- output ---\n${r.output || '(no output)'}`);
       }
     }
     return err(`Unknown tool: ${name}`);

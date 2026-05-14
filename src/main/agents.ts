@@ -250,6 +250,67 @@ class AgentManager {
     return { manifest: JSON.parse(raw) as AgentManifest, dir };
   }
 
+  // Resolve the interpreter + env for an agent. node => the node binary (or
+  // the bundled Electron-as-node fallback); tsx => the tsx binary, which the
+  // user must have installed. Shared by run() and runAndCollect().
+  private resolveAgentCommand(
+    manifest: AgentManifest, dir: string, entryAbs: string, root: string
+  ): { cmd: string; args: string[]; env: Record<string, string> } {
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      OPENDEV_WORKSPACE_ROOT: root,
+      OPENDEV_AGENT_DIR: dir,
+      FORCE_COLOR: '1'
+    };
+    if (manifest.runtime === 'tsx') {
+      const tsx = resolveBinPath('tsx');
+      if (!tsx) {
+        throw new Error('This agent is TypeScript and needs tsx. Install it with: npm i -g tsx');
+      }
+      return { cmd: tsx, args: [entryAbs], env };
+    }
+    const node = resolveBinPath('node');
+    if (node) return { cmd: node, args: [entryAbs], env };
+    // Fall back to running the bundled Electron binary as plain Node.
+    return { cmd: process.execPath, args: [entryAbs], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+  }
+
+  // Run an agent and resolve with its full output once it exits. Used by the
+  // MCP `ide_run_agent` tool so the main AI can invoke an agent and read the
+  // result synchronously (no IPC streaming, no center tab).
+  async runAndCollect(
+    slug: string, opts: { timeoutMs?: number } = {}
+  ): Promise<{ output: string; exitCode: number | null; timedOut: boolean }> {
+    const root = workspace.getRoot();
+    if (!root) throw new Error('No workspace open');
+    await this.ensureBuiltins();
+    const { manifest, dir } = await this.loadManifest(slug);
+    const entryAbs = join(dir, manifest.entry);
+    if (!(await this.exists(entryAbs))) {
+      throw new Error(`Agent entry not found: ${manifest.entry}`);
+    }
+    const { cmd, args, env } = this.resolveAgentCommand(manifest, dir, entryAbs, root);
+    const timeoutMs = Math.min(Math.max(1000, opts.timeoutMs ?? 120_000), 600_000);
+    const cap = 2 * 1024 * 1024;
+    return new Promise((resolveP) => {
+      const proc = spawn(cmd, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env });
+      let output = '';
+      let timedOut = false;
+      const onData = (b: Buffer) => { if (output.length < cap) output += b.toString('utf8'); };
+      proc.stdout?.on('data', onData);
+      proc.stderr?.on('data', onData);
+      const t = setTimeout(() => { timedOut = true; try { proc.kill('SIGTERM'); } catch {} }, timeoutMs);
+      proc.on('exit', (code) => {
+        clearTimeout(t);
+        resolveP({ output: output.slice(0, cap), exitCode: code, timedOut });
+      });
+      proc.on('error', (e) => {
+        clearTimeout(t);
+        resolveP({ output: output + `\n[spawn error] ${e.message}`, exitCode: -1, timedOut });
+      });
+    });
+  }
+
   async run(slug: string, target: AgentRunTarget = 'local'): Promise<AgentRun> {
     // Remote dispatch is wired in Milestone 3; for now only 'local' runs here.
     if (target !== 'local') {
@@ -265,35 +326,7 @@ class AgentManager {
       throw new Error(`Agent entry not found: ${manifest.entry}`);
     }
 
-    // Resolve the interpreter. node => the node binary (or Electron-as-node
-    // fallback). tsx => the tsx binary, which must be installed.
-    let cmd: string;
-    let args: string[];
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      OPENDEV_WORKSPACE_ROOT: root,
-      OPENDEV_AGENT_DIR: dir,
-      FORCE_COLOR: '1'
-    };
-    if (manifest.runtime === 'tsx') {
-      const tsx = resolveBinPath('tsx');
-      if (!tsx) {
-        throw new Error('This agent is TypeScript and needs tsx. Install it with: npm i -g tsx');
-      }
-      cmd = tsx;
-      args = [entryAbs];
-    } else {
-      const node = resolveBinPath('node');
-      if (node) {
-        cmd = node;
-        args = [entryAbs];
-      } else {
-        // Fall back to running the bundled Electron binary as plain Node.
-        cmd = process.execPath;
-        args = [entryAbs];
-        env.ELECTRON_RUN_AS_NODE = '1';
-      }
-    }
+    const { cmd, args, env } = this.resolveAgentCommand(manifest, dir, entryAbs, root);
 
     const runId = `ar-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const streamId = runId;
