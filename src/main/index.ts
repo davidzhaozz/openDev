@@ -85,6 +85,11 @@ function createWindow() {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show());
 
+  // Drop the reference when the window is gone — otherwise `mainWindow`
+  // keeps pointing at a destroyed BrowserWindow, and any later access to
+  // `.webContents` (e.g. a menu action) throws "Object has been destroyed".
+  mainWindow.on('closed', () => { mainWindow = null; });
+
   if (process.env.NODE_ENV === 'development' || process.env.OPENDEV_DEVTOOLS === '1') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
@@ -122,7 +127,17 @@ function createWindow() {
 }
 
 function sendMenu(action: string) {
-  mainWindow?.webContents.send('menu:event', action);
+  // The macOS app menu stays active even with no window open. If the user
+  // closed the window and then hits e.g. ⌘O, recreate the window and
+  // deliver the action once its renderer has loaded.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('menu:event', action);
+    return;
+  }
+  createWindow();
+  mainWindow!.webContents.once('did-finish-load', () => {
+    mainWindow?.webContents.send('menu:event', action);
+  });
 }
 
 function buildAppMenu() {
@@ -225,5 +240,8 @@ app.on('before-quit', async (e) => {
 });
 
 export function getMainWindow(): BrowserWindow | null {
+  // Never hand back a destroyed window — callers (safeSend etc.) treat a
+  // null result as "no window", but would throw on a destroyed one.
+  if (mainWindow && mainWindow.isDestroyed()) return null;
   return mainWindow;
 }
