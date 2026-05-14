@@ -56,6 +56,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
   const [streaming, setStreaming] = useState('');
   const [text, setText] = useState('');
   const [transport, setTransport] = useState<'claude-cli' | 'codex-cli'>('claude-cli');
+  const providerLabel = transport === 'codex-cli' ? 'Codex' : 'Claude';
   const [sending, setSending] = useState(false);
   const streamIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -92,10 +93,23 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
     }
     window.opendev.ai.conversation(convId).then(c => {
       if (cancelled) return;
-      if (c) setMessages(c.messages);
+      if (!c) return;
+      // Legacy conversations pre-date the per-message `provider` tag —
+      // codex support was added afterwards, so any assistant message
+      // without a provider must have come from claude. Backfill so the
+      // label doesn't flip when the user switches the dropdown.
+      setMessages(c.messages.map(m =>
+        m.role === 'assistant' && !m.provider ? { ...m, provider: 'claude' as const } : m
+      ));
     });
     return () => { cancelled = true; };
   }, [convId]);
+
+  // Capture the transport used for the in-flight request so the assistant
+  // message we append on `done` is stamped with the provider that actually
+  // produced it — not whatever the dropdown happens to be set to when the
+  // response lands.
+  const inFlightProviderRef = useRef<'claude' | 'codex'>('claude');
 
   // Stream listener — only consumes events targeted at THIS tab's request.
   useEffect(() => {
@@ -109,7 +123,8 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
           id: `local-${Date.now()}`,
           role: 'assistant',
           text: finalText,
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          provider: inFlightProviderRef.current
         }]);
         setStreaming('');
         setSending(false);
@@ -189,6 +204,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
           active: t.id === activeId
         }))
       };
+      inFlightProviderRef.current = transport === 'codex-cli' ? 'codex' : 'claude';
       const r = await window.opendev.ai.send({ conversationId: convId, text, attachments, transport, context });
       streamIdRef.current = r.streamId;
       if (!convId) {
@@ -276,7 +292,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
       {sending && (
         <div className="chat-banner">
           <span>
-            Claude is responding{streaming ? '' : ' (waiting for first chunk)'}…
+            {providerLabel} is responding{streaming ? '' : ' (waiting for first chunk)'}…
           </span>
           <span className="chat-banner-hint">
             Type a follow-up below and press Enter — it will interrupt the current response and continue the same conversation.
@@ -284,10 +300,11 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
         </div>
       )}
       <div className="chat-list" ref={scrollRef} onClick={focusComposer}>
-        {messages.map(m => <ChatBubble key={m.id} message={m} />)}
+        {messages.map(m => <ChatBubble key={m.id} message={m} fallbackProviderLabel={providerLabel} />)}
         {streaming && <ChatBubble key="streaming" message={{
-          id: 'streaming', role: 'assistant', text: streaming, createdAt: Date.now()
-        }} streaming />}
+          id: 'streaming', role: 'assistant', text: streaming, createdAt: Date.now(),
+          provider: inFlightProviderRef.current
+        }} streaming fallbackProviderLabel={providerLabel} />}
         {!messages.length && !streaming && (
           <div className="chat-empty">
             <div className="chat-empty-title">New conversation</div>
@@ -324,7 +341,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
         )}
         {visibleAttachments.some(a => a.kind === 'picked-element') && (
           <div className="composer-hint">
-            Element attached. Type what you want Claude to do with it (e.g. "make this button bigger", "match the colors to the design at …").
+            Element attached. Type what you want {providerLabel} to do with it (e.g. "make this button bigger", "match the colors to the design at …").
           </div>
         )}
 
@@ -332,7 +349,7 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
           <textarea
             ref={textareaRef}
             value={text}
-            placeholder={sending ? 'Claude is responding — type to send a follow-up (will interrupt)' : 'Ask Claude…'}
+            placeholder={sending ? `${providerLabel} is responding — type to send a follow-up (will interrupt)` : `Ask ${providerLabel}…`}
             rows={1}
             // NEVER disable: the user must always be able to type and
             // queue/replace the next message, especially when Claude has
@@ -411,14 +428,19 @@ export function AIChat({ tabId, initialConversationId, active }: Props) {
 // light markdown pass (code fences, inline code, bold/italic, lists).
 // =====================================================================
 
-function ChatBubble({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
+function ChatBubble({ message, streaming, fallbackProviderLabel }: { message: ChatMessage; streaming?: boolean; fallbackProviderLabel: string }) {
   const isUser = message.role === 'user';
+  // Prefer the provider stamped on the message itself (so old turns retain
+  // their original label after the user switches transports). Fall back to
+  // the composer's current label for legacy messages without `provider`.
+  const messageProviderLabel = message.provider === 'codex' ? 'Codex' :
+    message.provider === 'claude' ? 'Claude' : fallbackProviderLabel;
   return (
     <div className={`bubble-row ${isUser ? 'user' : 'assistant'}`}>
       <div className="bubble-avatar" aria-hidden>{isUser ? 'You' : 'AI'}</div>
       <div className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}>
         <div className="bubble-meta">
-          <span className="bubble-role">{isUser ? 'You' : 'Claude'}</span>
+          <span className="bubble-role">{isUser ? 'You' : messageProviderLabel}</span>
           <span className="bubble-time">{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           {streaming && <span className="bubble-streaming">●</span>}
         </div>

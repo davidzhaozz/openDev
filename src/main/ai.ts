@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { spawn, type ChildProcess } from 'child_process';
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
@@ -49,6 +49,26 @@ const activeStreams = new Map<string, AbortController | ChildProcess>();
 
 function convDir(): string { return join(getStorageDir(), 'conversations'); }
 function convPath(id: string): string { return join(convDir(), `${id}.json`); }
+
+// Resolve a CLI name (e.g. "claude") to an absolute path by walking PATH +
+// common user bin dirs. We do our own walk instead of trusting spawn's PATH
+// lookup because Finder-launched .app processes get a minimal PATH, and
+// `hydrateShellPath` (called at startup) can silently fail on weird shell
+// setups — surfacing "not found" with the PATH we searched is far more
+// useful than ENOENT bubbling up as "[claude cli exited -2]".
+function resolveBinPath(nameOrPath: string): string | null {
+  // Already absolute — trust it (let spawn surface any access errors).
+  if (nameOrPath.startsWith('/')) return existsSync(nameOrPath) ? nameOrPath : null;
+  const home = process.env.HOME || '';
+  const extras = home ? [`${home}/.local/bin`, `${home}/.bun/bin`, `${home}/.volta/bin`, `${home}/.cargo/bin`] : [];
+  const dirs = [...(process.env.PATH || '').split(':'), ...extras];
+  for (const d of dirs) {
+    if (!d) continue;
+    const p = `${d}/${nameOrPath}`;
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
 async function listConversations(): Promise<Conversation[]> {
   try {
@@ -262,14 +282,29 @@ async function streamViaClaudeSdk(streamId: string, text: string, conv: Conversa
   } finally {
     activeStreams.delete(streamId);
   }
-  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now() });
+  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'claude' });
   trimConversation(conv);
   await saveConversation(conv);
 }
 
 async function streamViaClaudeCli(streamId: string, text: string, conv: Conversation): Promise<void> {
   const settings = await loadSettings();
-  const claudeBin = settings.claudeCliPath || 'claude';
+  const configuredBin = settings.claudeCliPath || 'claude';
+  // Resolve to an absolute path so a Finder-launched .app (minimal PATH) can
+  // still find claude in ~/.local/bin etc., and so failures get blamed on
+  // the right thing instead of bubbling up as a generic ENOENT.
+  const claudeBin = resolveBinPath(configuredBin);
+  if (!claudeBin) {
+    const pathDisp = (process.env.PATH || '').split(':').filter(Boolean).join('\n  ');
+    const msg = `\n[claude cli not found]\n` +
+      `Looked for '${configuredBin}' on PATH:\n  ${pathDisp}\n\n` +
+      `Set Settings → AI CLI paths → Claude CLI path to an absolute path, e.g. ${process.env.HOME || '~'}/.local/bin/claude.\n`;
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    conv.messages.push({ id: randomUUID(), role: 'assistant', text: msg, createdAt: Date.now(), provider: 'claude' });
+    trimConversation(conv);
+    await saveConversation(conv);
+    return;
+  }
   const cwd = workspace.getRoot() || process.env.HOME || '/';
   // `--output-format stream-json --verbose` gives us a line-delimited event
   // stream so we can surface progress + tool calls in real time, instead of
@@ -285,6 +320,9 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
+    // TEMP DIAGNOSTIC: stream every debug category to stderr so we can see
+    // where claude blocks during startup. Remove once the hang is solved.
+    '-d', '*',
     // bypassPermissions = no per-tool approval prompts. The IDE chat is
     // already an opted-in surface, so we trust the model to write/edit
     // and surface the diff after.
@@ -300,9 +338,28 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     args.push('--resume', conv.claudeSessionId);
   }
   console.log(`[claude cli] spawn ${claudeBin} ${args.slice(0, 4).join(' ')}… in ${cwd} (prompt: ${text.length} chars)`);
+  // Filter Electron-specific env vars before handing to claude. Without this,
+  // a Finder-launched .app passes things like ELECTRON_RUN_AS_NODE and other
+  // packaging vars that can confuse child tools or leak Electron behavior
+  // into hook subshells. We keep everything else (PATH, HOME, locale,
+  // user-set API keys, etc.) so user customizations still apply.
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v == null) continue;
+    if (k.startsWith('ELECTRON_')) continue;
+    if (k === 'NODE_OPTIONS') continue;
+    childEnv[k] = v;
+  }
+  // Dump the env we hand to claude so the next bug repro shows exactly what
+  // the subprocess saw. Best-effort — never fail the spawn over this.
+  try {
+    void fs.writeFile('/tmp/opendev_claude_env.json', JSON.stringify({
+      claudeBin, cwd, pid: process.pid, ts: new Date().toISOString(), env: childEnv
+    }, null, 2));
+  } catch {}
   const proc = spawn(claudeBin, args, {
     cwd,
-    env: process.env,
+    env: childEnv,
     // Always pipe stdin so we can stream the prompt in — see the comment
     // on `args` above about why we don't pass it as a positional arg.
     stdio: ['pipe', 'pipe', 'pipe']
@@ -314,6 +371,9 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   let firstChunkAt: number | null = null;
   let stdoutBuf = '';
   let usedStreamJson = true;
+  // Set when WE kill the subprocess, so the close handler can report an
+  // accurate cause instead of generically blaming `claude login`.
+  let killReason: 'response-cap' | 'idle-watchdog' | null = null;
 
   const noteFirstChunk = () => { if (firstChunkAt == null) firstChunkAt = Date.now(); };
 
@@ -325,6 +385,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
       acc = acc.slice(0, LIMITS.aiResponseBytes) + marker;
       accTruncated = true;
       safeSend(IPC.AiStream, { streamId, chunk: marker, done: false });
+      killReason = 'response-cap';
       try { proc.kill('SIGTERM'); } catch {}
       return;
     }
@@ -380,8 +441,8 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
 
   proc.on('error', (err) => {
     const msg = `\n[claude cli failed to spawn] ${err.message}\n` +
-      `Check Settings → AI CLI paths. Currently using: ${claudeBin}\n` +
-      `Make sure ${claudeBin === 'claude' ? "'claude' is on PATH" : `the file ${claudeBin} exists`} and you've run 'claude login' at least once.\n`;
+      `Binary: ${claudeBin}\n` +
+      `Make sure the file exists and is executable, and that you've run \`claude login\` at least once.\n`;
     safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
     console.error('[claude cli] spawn error', err.message);
   });
@@ -419,6 +480,8 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     // can otherwise grow without bound.
     stderr = tail(stderr + t, LIMITS.aiStderrTailBytes);
     console.error('[claude cli stderr]', t.trimEnd());
+    // TEMP DIAGNOSTIC: also persist to /tmp so we can inspect after a kill.
+    try { fs.appendFile('/tmp/opendev_claude_stderr.log', t); } catch {}
     safeSend(IPC.AiStream, { streamId, chunk: `[stderr] ${t}`, done: false });
   });
 
@@ -450,11 +513,22 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   const idleWatchdog = setInterval(() => {
     if (Date.now() - lastChunkAt > IDLE_KILL_MS) {
       console.warn(`[claude cli] idle for ${IDLE_KILL_MS}ms — killing subprocess`);
+      // Forensic snapshot: write whatever stdout/stderr we DID see (often
+      // nothing — that's the point) so the next bug report can include it.
+      try {
+        void fs.writeFile('/tmp/opendev_claude_idlekill.log',
+          `idle-kill at ${new Date().toISOString()}\nbin=${claudeBin}\ncwd=${cwd}\n` +
+          `--- stdoutBuf (${stdoutBuf.length} bytes) ---\n${stdoutBuf}\n` +
+          `--- acc (${acc.length} bytes) ---\n${acc}\n` +
+          `--- stderr (${stderr.length} bytes) ---\n${stderr}\n`);
+      } catch {}
       safeSend(IPC.AiStream, {
         streamId,
-        chunk: `\n[no output for ${Math.round(IDLE_KILL_MS / 1000)}s — killing subprocess so you can try again]\n`,
+        chunk: `\n[no output for ${Math.round(IDLE_KILL_MS / 1000)}s — killing subprocess so you can try again]\n` +
+          `(env + raw buffers dumped to /tmp/opendev_claude_env.json and /tmp/opendev_claude_idlekill.log)\n`,
         done: false
       });
+      killReason = 'idle-watchdog';
       try { proc.kill('SIGTERM'); } catch {}
       // close handler will fire and resolve the outer promise
     }
@@ -465,7 +539,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   proc.stderr?.on('data', () => { lastChunkAt = Date.now(); });
 
   await new Promise<void>((resolve) => {
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       clearInterval(heartbeat);
       clearInterval(idleWatchdog);
       // Drain any trailing partial line as plain text
@@ -474,11 +548,26 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
         catch { emit(stdoutBuf); }
         stdoutBuf = '';
       }
-      console.log(`[claude cli] exit code=${code} acc=${acc.length} stderr=${stderr.length} streamJson=${usedStreamJson}`);
-      if (acc.length === 0 && code !== 0) {
-        const msg = `\n[claude cli exited ${code} with no output]\n` +
+      console.log(`[claude cli] exit code=${code} signal=${signal} kill=${killReason ?? 'none'} acc=${acc.length} stderr=${stderr.length} streamJson=${usedStreamJson}`);
+      // Bun-compiled binaries (like claude) translate SIGTERM into exit code
+      // 143, so signal is null but code reveals the kill.
+      const wasKilled = signal != null || code === 143;
+      if (acc.length === 0 && (code !== 0 || signal)) {
+        let cause: string;
+        if (killReason === 'idle-watchdog') {
+          cause = `claude produced no output for 60s; the IDE killed it. The CLI may be hanging on auth or a slow tool call.\n` +
+            `Try \`${claudeBin} -p "hello"\` in Terminal to confirm the CLI is working.`;
+        } else if (killReason === 'response-cap') {
+          cause = `Response exceeded the ${LIMITS.aiResponseBytes}-byte cap and was truncated.`;
+        } else if (wasKilled) {
+          cause = `claude was killed externally (Stop button, IDE quitting, or OS). The IDE didn't initiate this kill — if you didn't press Stop, check Console.app for the parent app being terminated.`;
+        } else {
+          cause = `claude exited on its own with code=${code}. Try \`${claudeBin} -p "hello"\` in Terminal — if that errors, the CLI isn't configured (run \`claude login\`).`;
+        }
+        const msg = `\n[claude cli error: exit code=${code} signal=${signal ?? 'none'}${killReason ? ` kill=${killReason}` : ''}]\n` +
+          `Binary: ${claudeBin}\n` +
           (stderr ? `stderr:\n${stderr}\n` : '') +
-          `Try in Terminal: \`${claudeBin} -p "hello"\`. If that hangs or errors, the CLI isn't configured. Run \`claude login\` first.\n`;
+          cause + '\n';
         safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
         acc = msg;
       }
@@ -487,7 +576,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   });
   safeSend(IPC.AiStream, { streamId, done: true, full: acc });
   activeStreams.delete(streamId);
-  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc, createdAt: Date.now() });
+  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc, createdAt: Date.now(), provider: 'claude' });
   trimConversation(conv);
   await saveConversation(conv);
 }
@@ -540,7 +629,7 @@ async function streamViaOpenAiSdk(streamId: string, text: string, conv: Conversa
   } finally {
     activeStreams.delete(streamId);
   }
-  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now() });
+  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'codex' });
   trimConversation(conv);
   await saveConversation(conv);
 }
@@ -548,34 +637,65 @@ async function streamViaOpenAiSdk(streamId: string, text: string, conv: Conversa
 async function streamViaCodexCli(streamId: string, text: string, conv: Conversation): Promise<void> {
   const settings = await loadSettings();
   const codexBin = settings.codexCliPath || 'codex';
+  const cwd = workspace.getRoot() || process.env.HOME || '/';
+  console.log(`[codex cli] spawn ${codexBin} exec --skip-git-repo-check  in ${cwd} (prompt: ${text.length} chars)`);
+  // stdin = ignore: the prompt is passed as a positional arg. Without an
+  // immediate EOF on stdin, codex's "Reading additional input from stdin…"
+  // step waits forever.
+  // As of codex-cli 0.130, stdout is the clean final answer and stderr
+  // carries the banner / prompt-echo / "tokens used" noise — so we stream
+  // stdout straight to the chat and keep stderr only for diagnostics.
   const proc = spawn(codexBin, ['exec', '--skip-git-repo-check', text], {
-    cwd: workspace.getRoot() || process.env.HOME,
-    env: process.env
+    cwd,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe']
   });
   activeStreams.set(streamId, proc);
   const acc = makeResponseAcc();
-  proc.stdout.on('data', (b: Buffer) => {
-    const t = b.toString('utf8');
-    acc.append(t);
+  let stderrBuf = '';
+
+  const emit = (chunk: string) => {
+    acc.append(chunk);
     if (acc.truncated()) {
-      // Past the cap: kill the subprocess so we don't keep heating up the
-      // pipe with bytes we'll throw away.
       try { proc.kill('SIGTERM'); } catch {}
       return;
     }
-    safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
+    safeSend(IPC.AiStream, { streamId, chunk, done: false });
+  };
+
+  proc.on('error', (err) => {
+    const msg = `\n[codex cli failed to spawn] ${err.message}\n` +
+      `Binary: ${codexBin}\n` +
+      `Make sure the file exists and is executable, and that you've signed in to codex.\n`;
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+    console.error('[codex cli] spawn error', err.message);
   });
-  proc.stderr.on('data', (b: Buffer) => console.error('[codex cli]', b.toString('utf8')));
+
+  proc.stdout?.on('data', (b: Buffer) => emit(b.toString('utf8')));
+
+  proc.stderr?.on('data', (b: Buffer) => {
+    const t = b.toString('utf8');
+    stderrBuf = tail(stderrBuf + t, LIMITS.aiStderrTailBytes);
+    console.error('[codex cli stderr]', t.trimEnd());
+  });
+
   await new Promise<void>((resolve) => {
-    proc.on('close', () => resolve());
-    proc.on('error', (err) => {
-      safeSend(IPC.AiStream, { streamId, chunk: `\n[codex cli error] ${err.message}\n`, done: false });
+    proc.on('close', (code) => {
+      console.log(`[codex cli] exit code=${code} acc=${acc.value().length} stderr=${stderrBuf.length}`);
+      if (acc.value().length === 0 && code !== 0) {
+        const msg = `\n[codex cli exited ${code} with no output]\n` +
+          (stderrBuf ? `stderr:\n${stderrBuf}\n` : '') +
+          `Try in Terminal: \`${codexBin} exec --skip-git-repo-check "hello"\`. ` +
+          `If that errors, the CLI isn't configured — run codex's login flow first.\n`;
+        safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+        acc.append(msg);
+      }
       resolve();
     });
   });
   safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
   activeStreams.delete(streamId);
-  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now() });
+  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'codex' });
   trimConversation(conv);
   await saveConversation(conv);
 }

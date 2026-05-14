@@ -46,12 +46,18 @@ export type ChatAttachment =
   | { kind: 'picked-element'; cssPath: string; outerHTML: string; styles: Record<string, string>; screenshotDataUrl?: string }
   | { kind: 'file'; name: string; mimeType: string; size: number; text?: string; dataUrl?: string };
 
+export type ChatProvider = 'claude' | 'codex';
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
   text: string;
   attachments?: ChatAttachment[];
   createdAt: number;
+  // Which AI produced this assistant message. Set at write time and never
+  // mutated — so the chat history keeps the original provider label even
+  // when the user later switches the composer to a different transport.
+  provider?: ChatProvider;
 };
 
 export type Conversation = {
