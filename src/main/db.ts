@@ -21,7 +21,7 @@ async function getUndiciAgent(): Promise<((opts: any) => UndiciAgent) | null> {
 }
 import { IPC } from '@shared/ipc';
 import type { DbConnectionProfile, DbResult, DbRowUpdate, DbUpdateResult, DbSchema, DbTable, DbColumn } from '@shared/types';
-import { getStorageDir } from './storage.js';
+import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS } from './limits.js';
 
@@ -287,17 +287,31 @@ async function deletePassword(id: string) {
   }
 }
 
-function profilesPath(): string { return join(getStorageDir(), 'db-connections.json'); }
+// Per-workspace DB connection profiles: each project has its own set under
+// .opendev/db-connections.json. Returns null when no workspace is open.
+// Keychain entries (KEYTAR_SERVICE='opendev-ide-db') stay global, keyed by
+// the per-connection id — different workspaces have different ids so they
+// don't collide.
+function profilesPath(): string | null {
+  const root = workspace.getRoot();
+  if (!root) return null;
+  return join(root, '.opendev', 'db-connections.json');
+}
 
 async function readProfiles(): Promise<DbConnectionProfile[]> {
+  const p = profilesPath();
+  if (!p) return [];
   try {
-    const raw = await fs.readFile(profilesPath(), 'utf8');
+    const raw = await fs.readFile(p, 'utf8');
     return (JSON.parse(raw) as { items: DbConnectionProfile[] }).items ?? [];
   } catch { return []; }
 }
 
 async function writeProfiles(items: DbConnectionProfile[]): Promise<void> {
-  await fs.writeFile(profilesPath(), JSON.stringify({ items }, null, 2), 'utf8');
+  const p = profilesPath();
+  if (!p) throw new Error('No workspace open — open a project before saving a DB connection.');
+  await fs.mkdir(join(p, '..'), { recursive: true });
+  await fs.writeFile(p, JSON.stringify({ items }, null, 2), 'utf8');
 }
 
 async function openPool(profile: DbConnectionProfile, passwordOverride?: string): Promise<Pool> {

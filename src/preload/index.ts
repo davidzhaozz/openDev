@@ -8,8 +8,10 @@ import type {
   AddPackageArgs,
   AddPackageResult,
   AppSettings,
+  InstallableTool,
   QueryHistoryEntry,
   QueryHistoryKind,
+  ToolInstallResult,
   ChatAttachment,
   Conversation,
   CreateProjectArgs,
@@ -256,6 +258,10 @@ const api = {
       ipcRenderer.invoke('tools:check'),
     installNode: (): Promise<{ ok: boolean; output?: string; error?: string }> =>
       ipcRenderer.invoke('tools:install-node'),
+    install: (tool: InstallableTool): Promise<ToolInstallResult> =>
+      ipcRenderer.invoke('tools:install', tool),
+    cancelInstall: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('tools:cancel-install'),
     onInstallLog: (cb: (chunk: string) => void) => on('tools:install-log', cb)
   },
   session: {

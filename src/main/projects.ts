@@ -291,13 +291,15 @@ function looksLikeName(name: string): boolean {
 }
 
 // Run a command, stream stdout/stderr through ProjectsCreateLog, resolve
-// with { code }. Used for both CLI scaffolds and post-install steps.
-function runStreamed(cmdName: string, args: string[], cwd: string): Promise<{ code: number | null }> {
+// with { code, missingTool? }. Used for both CLI scaffolds and post-install
+// steps. When the binary isn't on PATH, we surface its name so the wizard
+// can offer to install it.
+function runStreamed(cmdName: string, args: string[], cwd: string): Promise<{ code: number | null; missingTool?: string }> {
   return new Promise((resolveP) => {
     const resolved = resolveBinPath(cmdName);
     if (!resolved) {
-      logLine(`[error] ${cmdName} not found on PATH — install it and try again.`);
-      resolveP({ code: -1 });
+      logLine(`[error] ${cmdName} not found on PATH.`);
+      resolveP({ code: -1, missingTool: cmdName });
       return;
     }
     logLine(`$ ${cmdName} ${args.join(' ')}`);
@@ -342,6 +344,9 @@ async function createProject(args: CreateProjectArgs): Promise<CreateProjectResu
     const spec = t.cli(name, dest);
     const cwd = spec.cwd === 'parent' ? dest : projectPath;
     const r = await runStreamed(spec.cmd, spec.args, cwd);
+    if (r.missingTool) {
+      return { ok: false, error: `${r.missingTool} is not installed.`, errorCode: 'MISSING_TOOL', missingTool: r.missingTool };
+    }
     if (r.code !== 0) {
       return { ok: false, error: `${spec.cmd} exited with code ${r.code}.` };
     }
@@ -356,6 +361,15 @@ async function createProject(args: CreateProjectArgs): Promise<CreateProjectResu
     logLine('Installing dependencies…');
     const parts = t.postInstall.split(/\s+/);
     const r = await runStreamed(parts[0], parts.slice(1), projectPath);
+    if (r.missingTool) {
+      // Files are already on disk; surface the missing tool so the wizard
+      // can offer to install it. The user can hit Create again after install.
+      return {
+        ok: false, projectPath,
+        error: `${r.missingTool} is not installed — needed to install dependencies for this template.`,
+        errorCode: 'MISSING_TOOL', missingTool: r.missingTool
+      };
+    }
     if (r.code !== 0) {
       // Don't fail the create — files are already there, the user can re-run install.
       logLine(`[warn] dependency install failed (exit ${r.code}). The project files are in place; run \`${t.postInstall}\` in ${projectPath} to retry.`);

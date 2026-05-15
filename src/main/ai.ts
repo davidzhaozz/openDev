@@ -5,7 +5,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
 import type { ChatAttachment, ChatMessage, Conversation } from '@shared/types';
-import { getStorageDir, loadSettings } from './storage.js';
+import { loadSettings } from './storage.js';
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { LIMITS, tail } from './limits.js';
@@ -47,8 +47,18 @@ function trimConversation(c: Conversation): void {
 
 const activeStreams = new Map<string, AbortController | ChildProcess>();
 
-function convDir(): string { return join(getStorageDir(), 'conversations'); }
-function convPath(id: string): string { return join(convDir(), `${id}.json`); }
+// Per-workspace conversations: each project has its own AI chat history
+// under .opendev/conversations/. Returns null when no workspace is open
+// (callers degrade to empty results / errors).
+function convDir(): string | null {
+  const root = workspace.getRoot();
+  if (!root) return null;
+  return join(root, '.opendev', 'conversations');
+}
+function convPath(id: string): string | null {
+  const dir = convDir();
+  return dir ? join(dir, `${id}.json`) : null;
+}
 
 // Resolve a CLI name (e.g. "claude") to an absolute path by walking PATH +
 // common user bin dirs. We do our own walk instead of trusting spawn's PATH
@@ -71,13 +81,15 @@ export function resolveBinPath(nameOrPath: string): string | null {
 }
 
 async function listConversations(): Promise<Conversation[]> {
+  const dir = convDir();
+  if (!dir) return [];
   try {
-    const entries = await fs.readdir(convDir());
+    const entries = await fs.readdir(dir);
     const out: Conversation[] = [];
     for (const e of entries) {
       if (!e.endsWith('.json')) continue;
       try {
-        const c = JSON.parse(await fs.readFile(join(convDir(), e), 'utf8')) as Conversation;
+        const c = JSON.parse(await fs.readFile(join(dir, e), 'utf8')) as Conversation;
         out.push(c);
       } catch {}
     }
@@ -87,14 +99,19 @@ async function listConversations(): Promise<Conversation[]> {
 }
 
 async function loadConversation(id: string): Promise<Conversation | null> {
+  const p = convPath(id);
+  if (!p) return null;
   try {
-    return JSON.parse(await fs.readFile(convPath(id), 'utf8'));
+    return JSON.parse(await fs.readFile(p, 'utf8'));
   } catch { return null; }
 }
 
 async function saveConversation(c: Conversation): Promise<void> {
+  const p = convPath(c.id);
+  if (!p) return;
   c.updatedAt = Date.now();
-  await fs.writeFile(convPath(c.id), JSON.stringify(c, null, 2), 'utf8');
+  await fs.mkdir(join(p, '..'), { recursive: true });
+  await fs.writeFile(p, JSON.stringify(c, null, 2), 'utf8');
 }
 
 type IdeContext = {
@@ -718,7 +735,8 @@ export function registerAiIpc() {
   ipcMain.handle(IPC.AiConversations, () => listConversations());
   ipcMain.handle(IPC.AiConversationGet, (_e, id: string) => loadConversation(id));
   ipcMain.handle(IPC.AiConversationDelete, async (_e, id: string) => {
-    try { await fs.unlink(convPath(id)); } catch {}
+    const p = convPath(id);
+    if (p) { try { await fs.unlink(p); } catch {} }
     return true;
   });
 

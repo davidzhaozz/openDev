@@ -37,7 +37,14 @@ export function Welcome({ onOpen, onPick }: Props) {
 
         <div className="welcome-actions">
           <button className="primary" onClick={() => onPick()}>Open Folder…</button>
-          <button onClick={() => setModal('new-project')}>New Project…</button>
+          <button onClick={async () => {
+            // Folder picker first, then the form modal — matches the user's
+            // mental model of "where do I want this saved?" being the first
+            // question. Cancelling the picker just bails silently.
+            const dest = await window.opendev.projects.pickDir();
+            if (!dest) return;
+            setModal('new-project', { dest });
+          }}>New Project…</button>
         </div>
 
         <div className="welcome-section-label">Recent</div>

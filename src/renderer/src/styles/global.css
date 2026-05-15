@@ -3008,3 +3008,15 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   color: var(--fg-3);
 }
 .qh-bad { color: var(--danger); }
+
+.np-error-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.np-error-hint code {
+  background: var(--bg-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+}

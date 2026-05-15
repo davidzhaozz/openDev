@@ -313,6 +313,17 @@ export type CreateProjectResult = {
   ok: boolean;
   projectPath?: string;         // absolute path to the created project folder
   error?: string;
+  // Set when a required CLI is missing — the modal uses this to offer an
+  // "Install X for me" button.
+  errorCode?: 'MISSING_TOOL';
+  missingTool?: string;         // 'dotnet' | 'mvn' | 'tsx' | 'node' | …
+};
+
+// Tools the IDE knows how to install via brew.
+export type InstallableTool = 'node' | 'dotnet' | 'mvn' | 'java' | 'tsx';
+export type ToolInstallResult = {
+  ok: boolean;
+  error?: string;
 };
 
 // Add-package wizard.

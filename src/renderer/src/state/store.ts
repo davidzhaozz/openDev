@@ -190,7 +190,45 @@ let tabCounter = 0;
 const nextTabId = () => `t-${++tabCounter}-${Date.now()}`;
 
 export const useStore = create<Store>((set, get) => ({
-  setWorkspaceRoot: (root) => set({ workspaceRoot: root }),
+  setWorkspaceRoot: (root) => set((s) => {
+    // Workspace changed → wipe everything that's per-project so panels from
+    // the previous workspace don't leak into the new one. The persisted
+    // state (services.json, conversations/, db-connections.json, *-history,
+    // agents/) is already per-workspace on disk, so the renderer just needs
+    // to clear its in-memory caches.
+    if (s.workspaceRoot === root) return { workspaceRoot: root };
+    return {
+      workspaceRoot: root,
+      // AI chat
+      conversationId: undefined,
+      conversationMessages: [],
+      streamingText: '',
+      streamingId: undefined,
+      chatAttachments: [],
+      // Logs / services state (services array re-fetches per workspace anyway)
+      logBubbles: [],
+      services: [],
+      serviceStatuses: {},
+      serviceLogs: {},
+      // Debugger
+      breakpoints: {},
+      debugSession: undefined,
+      debugPaused: undefined,
+      debugSelectedFrameId: undefined,
+      debugConsole: '',
+      debugWatches: [],
+      // SQL / ES editor state (per-project queries shouldn't leak)
+      sqlConnId: undefined,
+      sqlResult: undefined,
+      sqlSource: undefined,
+      sqlText: 'SELECT 1;',
+      esResult: undefined,
+      esText: 'GET /_search\n{\n  "query": { "match_all": {} },\n  "size": 10\n}',
+      // Editor/jump state
+      references: undefined,
+      pendingJump: undefined
+    };
+  }),
 
   centerTabs: [],
   openFileTab: (path, content) => set((s) => {

@@ -249,7 +249,9 @@ export default function App() {
       } else if (action === 'settings') {
         setShowSettings(true);
       } else if (action === 'new-project') {
-        setModal('new-project');
+        // Folder picker first, then the form modal pre-filled with the dest.
+        const dest = await window.opendev.projects.pickDir();
+        if (dest) setModal('new-project', { dest });
       }
     });
     return off;
@@ -354,9 +356,17 @@ export default function App() {
         </div>
         <Welcome onOpen={openPath} onPick={pickWorkspace} />
         {showSettings && <Settings onClose={() => setShowSettings(false)} />}
-      {installPrompt && (
-        <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
-      )}
+        {installPrompt && (
+          <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
+        )}
+        {/* Modals are reachable from the Welcome screen too — without these
+            here, clicking "New Project" before opening a workspace would flip
+            the state but never render anything (the main render branch below
+            is gated on `root`). */}
+        {modal === 'new-project' && (() => {
+          const dest = (useStore.getState().modalPayload as { dest?: string } | undefined)?.dest;
+          return <NewProjectModal initialDest={dest} onClose={() => setModal(null)} />;
+        })()}
         {toast && <div className="toast">{toast}</div>}
       </div>
     );
@@ -586,7 +596,10 @@ export default function App() {
 
       {modal === 'fuzzy' && <FuzzyFinder />}
       {modal === 'find' && <FindInFiles />}
-      {modal === 'new-project' && <NewProjectModal onClose={() => setModal(null)} />}
+      {modal === 'new-project' && (() => {
+        const dest = (useStore.getState().modalPayload as { dest?: string } | undefined)?.dest;
+        return <NewProjectModal initialDest={dest} onClose={() => setModal(null)} />;
+      })()}
       {modal === 'add-package' && (() => {
         const dir = (useStore.getState().modalPayload as { dir?: string } | undefined)?.dir;
         if (!dir) return null;

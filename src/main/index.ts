@@ -157,7 +157,22 @@ function buildAppMenu() {
       ]
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      // Custom View menu — same as Electron's `viewMenu` role MINUS the
+      // devtools entries. The user prefers no in-app devtools surface; for
+      // troubleshooting, launch with the OPENDEV_DEVTOOLS=1 env var.
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
     { role: 'windowMenu' }
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
