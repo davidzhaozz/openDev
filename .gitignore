@@ -10,3 +10,6 @@ out/
 
 # Local design / planning docs — kept locally, not published
 docs/
+
+# AI assistant context — local only, never published
+CLAUDE.md
