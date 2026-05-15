@@ -35,6 +35,7 @@ import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
 import { markdown } from '@codemirror/lang-markdown';
 import { sql } from '@codemirror/lang-sql';
+import { java } from '@codemirror/lang-java';
 
 function langForPath(path: string) {
   const ext = path.split('.').pop()?.toLowerCase();
@@ -46,6 +47,7 @@ function langForPath(path: string) {
     case 'html': case 'htm': return html();
     case 'md': case 'mdx': return markdown();
     case 'sql': return sql();
+    case 'java': return java();
     default: return javascript();
   }
 }

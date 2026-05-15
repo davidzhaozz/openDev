@@ -74,17 +74,51 @@ class ServiceManager {
     // Always use the folder name — package.json's `name` is often scoped/internal
     // and doesn't match what you'd recognize in the services list.
     const name = cwd === '.' ? root.split('/').pop() || 'service' : cwd.split('/').pop() || cwd;
-    let command = 'npm run dev';
-    try {
-      const pkg = JSON.parse(await fs.readFile(join(norm, 'package.json'), 'utf8'));
-      const scripts = pkg.scripts || {};
-      if (scripts.dev) command = 'npm run dev';
-      else if (scripts.start) command = 'npm run start';
-      else if (scripts.serve) command = 'npm run serve';
-    } catch {
-      // No package.json — leave the placeholder command for the user to edit later
+
+    const has = async (f: string): Promise<boolean> => {
+      try { await fs.access(join(norm, f)); return true; } catch { return false; }
+    };
+    const read = async (f: string): Promise<string | null> => {
+      try { return await fs.readFile(join(norm, f), 'utf8'); } catch { return null; }
+    };
+
+    // 1. Node / npm — pick the most "run"-like script.
+    const pkgRaw = await read('package.json');
+    if (pkgRaw) {
+      try {
+        const scripts = (JSON.parse(pkgRaw).scripts || {}) as Record<string, string>;
+        let command = 'npm start';
+        if (scripts.dev) command = 'npm run dev';
+        else if (scripts.start) command = 'npm run start';
+        else if (scripts.serve) command = 'npm run serve';
+        return { name, command, cwd };
+      } catch {
+        // Malformed package.json — fall through to other detectors.
+      }
     }
-    return { name, command, cwd };
+
+    // 2. Maven (pom.xml) — prefer the project's wrapper if present.
+    const pom = await read('pom.xml');
+    if (pom) {
+      const mvn = (await has('mvnw')) ? './mvnw' : 'mvn';
+      const command = /spring-boot/.test(pom)
+        ? `${mvn} spring-boot:run`
+        : `${mvn} compile exec:java`;
+      return { name, command, cwd };
+    }
+
+    // 3. Gradle (build.gradle / build.gradle.kts).
+    const gradleBuild = (await read('build.gradle')) ?? (await read('build.gradle.kts'));
+    if (gradleBuild) {
+      const gradle = (await has('gradlew')) ? './gradlew' : 'gradle';
+      const command = /spring-boot|org\.springframework\.boot/.test(gradleBuild)
+        ? `${gradle} bootRun`
+        : `${gradle} run`;
+      return { name, command, cwd };
+    }
+
+    // Nothing recognized — leave a generic placeholder for the user to edit.
+    return { name, command: 'npm run dev', cwd };
   }
 
   async save(def: ServiceDef): Promise<ServiceDef> {
