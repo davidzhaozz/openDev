@@ -52,8 +52,20 @@ export function Welcome({ onOpen, onPick }: Props) {
           {recents.length === 0 && <div className="welcome-empty">Nothing here yet — open a folder above.</div>}
           {recents.map(p => (
             <div key={p} className="welcome-recent" onClick={() => onOpen(p)}>
-              <span className="welcome-name">{p.split('/').filter(Boolean).pop() || p}</span>
-              <span className="welcome-path">{shortPath(p)}</span>
+              <div className="welcome-recent-text">
+                <span className="welcome-name">{p.split('/').filter(Boolean).pop() || p}</span>
+                <span className="welcome-path">{shortPath(p)}</span>
+              </div>
+              <button
+                className="welcome-recent-x"
+                title="Remove from recents (doesn't touch the folder on disk)"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const next = recents.filter((x) => x !== p);
+                  setRecents(next);
+                  await window.opendev.settings.set({ recentWorkspaces: next });
+                }}
+              >✕</button>
             </div>
           ))}
         </div>
