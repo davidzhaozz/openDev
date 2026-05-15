@@ -1,7 +1,7 @@
 {
   "name": "opendev-ide",
   "version": "0.5.20",
-  "description": "AI-first JavaScript / TypeScript IDE with embedded browser, SQL client, and Claude integration.",
+  "description": "AI-first JavaScript / TypeScript / Java IDE with embedded browser, SQL client, and Claude integration.",
   "main": "out/main/index.js",
   "author": "David Zhao",
   "license": "MIT",
