@@ -2682,3 +2682,236 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
 }
 .agents-peer-push:hover { background: var(--bg-hover); }
 .agents-peer-push:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Debugger: breakpoint gutter + paused line ─────────────────────── */
+.cm-bp-gutter {
+  width: 18px;
+  cursor: pointer;
+  background: transparent;
+}
+.cm-bp-gutter .cm-gutterElement:hover .cm-bp-spacer {
+  /* Show a faint dot on hover so the user knows clicking sets a breakpoint */
+  background: rgba(244, 135, 113, 0.35);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.cm-bp-marker {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger, #f48771);
+  box-shadow: 0 0 4px rgba(244, 135, 113, 0.5);
+}
+.cm-bp-spacer {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
+.cm-paused-line {
+  background: rgba(204, 167, 0, 0.18) !important;
+  box-shadow: inset 3px 0 0 var(--warn, #cca700);
+}
+
+/* ── Debug toolbar (above the editor) ──────────────────────────────── */
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+.debug-toolbar .dbg-btn {
+  font-size: 13px;
+  padding: 2px 8px;
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 28px;
+}
+.debug-toolbar .dbg-btn:hover { background: var(--bg-hover); }
+.debug-toolbar .dbg-btn:disabled { opacity: 0.4; cursor: default; }
+.debug-toolbar .dbg-btn.stop { background: var(--danger); border-color: var(--danger); color: #2a1410; }
+.debug-toolbar .dbg-btn.link {
+  background: transparent; border-color: transparent; color: var(--accent-hi);
+  font-size: 11px; padding: 2px 6px;
+}
+.debug-toolbar .dbg-debug {
+  font-size: 12px; font-weight: 600;
+  padding: 3px 12px;
+  background: var(--accent); border: 1px solid var(--accent-hi); color: #fff;
+  border-radius: 4px; cursor: pointer;
+}
+.debug-toolbar .dbg-status {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 3px; margin-right: 4px;
+}
+.debug-toolbar .dbg-status.running { background: rgba(17,119,187,0.15); color: var(--accent-hi); }
+.debug-toolbar .dbg-status.paused  { background: rgba(204,167,0,0.18); color: var(--warn); }
+.debug-toolbar .dbg-status.starting { background: var(--bg-3); color: var(--fg-2); }
+.debug-toolbar .dbg-status.terminated { background: var(--bg-3); color: var(--fg-3); }
+
+/* ── Debug right-panel ─────────────────────────────────────────────── */
+.debug-panel {
+  display: flex; flex-direction: column;
+  height: 100%; min-height: 0;
+  background: var(--bg-1);
+  font-size: 12px;
+  overflow: hidden;
+}
+.debug-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+}
+.debug-title { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-2); }
+.debug-status {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 3px;
+}
+.debug-status.running { background: rgba(17,119,187,0.15); color: var(--accent-hi); }
+.debug-status.paused { background: rgba(204,167,0,0.18); color: var(--warn); }
+.debug-status.starting { background: var(--bg-3); color: var(--fg-2); }
+.debug-status.terminated { background: var(--bg-3); color: var(--fg-3); }
+.debug-btn { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-3); color: var(--fg-1); cursor: pointer; }
+.debug-btn.stop { background: var(--danger); border-color: var(--danger); color: #2a1410; }
+.debug-empty { padding: 12px; color: var(--fg-3); font-size: 11.5px; line-height: 1.5; }
+.debug-mini { padding: 4px 12px; color: var(--fg-3); font-size: 11px; }
+.debug-mini-btn {
+  font-size: 10px; padding: 1px 6px; margin-left: 6px; background: transparent;
+  border: 1px solid var(--border); color: var(--fg-3); border-radius: 3px; cursor: pointer;
+}
+.debug-section { border-bottom: 1px solid var(--border); padding: 6px 0 8px; }
+.debug-section:last-child { border-bottom: 0; }
+.debug-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--fg-2); padding: 0 12px 4px;
+  display: flex; align-items: center;
+}
+.debug-frame {
+  display: flex; gap: 8px; padding: 3px 12px; cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.debug-frame:hover { background: var(--bg-hover); }
+.debug-frame.selected { background: rgba(17,119,187,0.12); border-left-color: var(--accent-hi); }
+.frame-name { color: var(--fg-0); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame-loc { color: var(--fg-3); font-family: var(--font-mono); font-size: 10.5px; }
+.debug-scope { padding: 0 12px; }
+.scope-head { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 2px 0; }
+.scope-head:hover { color: var(--fg-0); }
+.scope-name { font-weight: 600; }
+.caret { color: var(--fg-3); font-size: 10px; width: 10px; }
+.scope-vars { padding: 2px 0 4px 16px; }
+.var-row { display: flex; gap: 6px; font-size: 11.5px; padding: 1px 0; }
+.var-name { color: var(--syntax-variable, #9cdcfe); font-family: var(--font-mono); }
+.var-eq { color: var(--fg-3); }
+.var-val { color: var(--fg-0); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.watch-row { display: flex; gap: 6px; align-items: center; padding: 2px 12px; font-size: 11.5px; }
+.watch-row:hover { background: var(--bg-hover); }
+.watch-expr { color: var(--syntax-variable, #9cdcfe); font-family: var(--font-mono); }
+.watch-val { color: var(--fg-0); font-family: var(--font-mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.watch-x { background: transparent; border: 0; color: var(--fg-3); cursor: pointer; padding: 0 4px; }
+.watch-input {
+  margin: 4px 12px; width: calc(100% - 24px); padding: 3px 6px;
+  background: var(--bg-0); color: var(--fg-0); border: 1px solid var(--border); border-radius: 4px; font-size: 11.5px;
+}
+.bp-row { display: flex; gap: 6px; align-items: center; padding: 2px 12px; font-size: 11.5px; }
+.bp-row:hover { background: var(--bg-hover); }
+.bp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
+.bp-loc { flex: 1; color: var(--fg-1); cursor: pointer; font-family: var(--font-mono); font-size: 11px; }
+.bp-loc:hover { color: var(--accent-hi); text-decoration: underline; }
+.bp-x { background: transparent; border: 0; color: var(--fg-3); cursor: pointer; padding: 0 4px; }
+.debug-console-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.debug-console {
+  flex: 1; min-height: 0; margin: 0; padding: 6px 12px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-0);
+  background: var(--bg-0); white-space: pre-wrap; word-break: break-word; overflow: auto;
+}
+
+/* ── New Project wizard ─────────────────────────────────────────────── */
+.new-project-modal {
+  width: 560px;
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.modal-title { font-weight: 700; font-size: 13px; }
+.modal-x {
+  background: transparent; border: 0; color: var(--fg-2); cursor: pointer;
+  font-size: 14px; padding: 0 6px;
+}
+.modal-x:hover { color: var(--fg-0); }
+.np-form { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.np-row { display: flex; align-items: center; gap: 10px; }
+.np-row label {
+  width: 110px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--fg-2); flex-shrink: 0;
+}
+.np-row select, .np-row input {
+  flex: 1; font-size: 12.5px; padding: 5px 8px;
+  background: var(--bg-0); color: var(--fg-0);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.np-dest { display: flex; gap: 6px; flex: 1; }
+.np-dest input { flex: 1; }
+.np-dest button {
+  font-size: 11.5px; padding: 4px 10px; border-radius: 4px;
+  background: var(--bg-3); color: var(--fg-1); border: 1px solid var(--border); cursor: pointer;
+}
+.np-desc {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px;
+  font-size: 11.5px; line-height: 1.5; color: var(--fg-1);
+}
+.np-req { color: var(--warn, #cca700); margin-top: 4px; font-size: 11px; }
+.np-hint { color: var(--fg-2); margin-top: 4px; font-size: 11px; font-family: var(--font-mono); }
+.np-error {
+  background: rgba(244, 135, 113, 0.12);
+  border: 1px solid var(--danger);
+  border-radius: 6px; padding: 8px 10px;
+  font-size: 12px; color: var(--danger);
+}
+.np-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.np-actions button {
+  font-size: 12px; padding: 5px 14px; border-radius: 4px;
+  background: var(--bg-3); color: var(--fg-1); border: 1px solid var(--border); cursor: pointer;
+}
+.np-actions button.primary { background: var(--accent); border-color: var(--accent-hi); color: #fff; }
+.np-actions button:disabled { opacity: 0.5; cursor: default; }
+.np-creating, .np-done {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  min-height: 0; flex: 1;
+}
+.np-status { color: var(--fg-1); font-size: 12.5px; }
+.np-success { color: var(--ok, #4ec9b0); font-size: 13px; font-weight: 600; }
+.np-success code { background: var(--bg-2); padding: 2px 6px; border-radius: 3px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-0); }
+.np-log {
+  flex: 1; min-height: 160px; max-height: 420px;
+  margin: 0; padding: 8px 10px;
+  background: var(--bg-0); color: var(--fg-0);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; overflow: auto;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+
+.np-detected {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-1);
+  background: var(--bg-2);
+  padding: 4px 8px;
+  border-radius: 4px;
+}

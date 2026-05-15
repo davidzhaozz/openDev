@@ -117,6 +117,19 @@ class ServiceManager {
       return { name, command, cwd };
     }
 
+    // 4. .NET / dotnet — any *.csproj or *.sln in this folder counts.
+    try {
+      const entries = await fs.readdir(norm);
+      const hasCsproj = entries.some(e => e.endsWith('.csproj'));
+      const hasSln = entries.some(e => e.endsWith('.sln'));
+      if (hasCsproj || hasSln) {
+        // `dotnet run` from a folder containing a .csproj just works; with a
+        // .sln you may need --project, but `dotnet run` will pick the single
+        // project if there's only one — leaves the trivial case clean.
+        return { name, command: 'dotnet run', cwd };
+      }
+    } catch { /* unreadable dir — fall through */ }
+
     // Nothing recognized — leave a generic placeholder for the user to edit.
     return { name, command: 'npm run dev', cwd };
   }

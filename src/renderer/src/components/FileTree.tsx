@@ -17,6 +17,7 @@ export function FileTree({ root, onOpen }: Props) {
   const [ctx, setCtx] = useState<{ x: number; y: number; node: FileNode } | null>(null);
   const showToast = useStore(s => s.showToast);
   const openTerminalTab = useStore(s => s.openTerminalTab);
+  const setModal = useStore(s => s.setModal);
   const [branchPicker, setBranchPicker] = useState<{ path: string; name: string; current: string; branches: string[] } | null>(null);
 
   const loadDir = useCallback(async (dir: string) => {
@@ -205,6 +206,16 @@ export function FileTree({ root, onOpen }: Props) {
             openTerminalTab({ cwd: target, name: ctx.node.name });
             setCtx(null);
           }}>Start Terminal Here</div>}
+          {ctx.node.isDir && <div className="item" onClick={async () => {
+            const target = ctx.node.path;
+            setCtx(null);
+            const det = await window.opendev.packages.detect(target);
+            if (!det) {
+              showToast('No Maven (pom.xml) or .NET (.csproj) project in this folder.', 3500);
+              return;
+            }
+            setModal('add-package', { dir: target });
+          }}>Add Package…</div>}
           {ctx.node.isDir && ctx.node.gitInfo && (
             <div className="item" onClick={async () => {
               const target = ctx.node.path;

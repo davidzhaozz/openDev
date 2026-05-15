@@ -136,6 +136,23 @@ export const IPC = {
   PeersPushRepo: 'peers:push-repo',
   PeersChanged: 'peers:changed',    // main → renderer
 
+  // debugger
+  DebugStart: 'debug:start',
+  DebugRequest: 'debug:request',
+  DebugStop: 'debug:stop',
+  DebugEvent: 'debug:event',        // main → renderer
+
+  // new-project wizard
+  ProjectsList: 'projects:list',
+  ProjectsCreate: 'projects:create',
+  ProjectsCreateLog: 'projects:create-log',  // main → renderer (progress)
+  ProjectsPickDir: 'projects:pick-dir',
+
+  // add-package wizard
+  PackagesDetect: 'packages:detect',
+  PackagesAdd: 'packages:add',
+  PackagesAddLog: 'packages:add-log',     // main → renderer (progress)
+
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning'
 } as const;

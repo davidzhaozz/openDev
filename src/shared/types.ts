@@ -248,3 +248,94 @@ export type PeersStatus = {
   hasLinkKey: boolean;
   httpPort?: number;
 };
+
+// ── Debugger ───────────────────────────────────────────────────────────
+// A protocol-agnostic vocabulary the renderer consumes. NodeDebugSession
+// (CDP) and JavaDebugSession (JDWP) both translate into these shapes.
+
+export type DebugLang = 'node' | 'java';
+export type DebugStatus = 'starting' | 'running' | 'paused' | 'terminated';
+
+export type StackFrame = {
+  id: string;            // opaque frame id (CDP callFrameId, etc.)
+  name: string;          // function / method name
+  path?: string;         // absolute source path, if resolvable
+  line: number;          // 1-indexed
+  col: number;           // 1-indexed
+};
+
+export type Scope = {
+  name: string;          // "Local", "Closure", "Global", …
+  varsRef: string;       // opaque ref to expand via getVariables
+  expensive?: boolean;
+};
+
+export type DebugVar = {
+  name: string;
+  value: string;
+  type?: string;
+  varsRef?: string;      // present when the value is expandable
+};
+
+export type DebugStartConfig =
+  | { lang: 'node'; file: string }          // M1: debug a JS file
+  | { lang: 'java'; serviceId: string };    // M2: debug a Maven/Gradle service
+
+export type DebugEventMsg =
+  | { kind: 'session-started'; sessionId: string; lang: DebugLang }
+  | { kind: 'paused'; reason: string; threadId: number; frames: StackFrame[] }
+  | { kind: 'resumed' }
+  | { kind: 'output'; category: 'stdout' | 'stderr'; text: string }
+  | { kind: 'breakpoint-resolved'; path: string; line: number; verified: boolean }
+  | { kind: 'terminated'; exitCode: number | null };
+
+// ── New-project wizard ────────────────────────────────────────────────
+// Each template lives in src/main/projects.ts and either writes inline
+// files to disk or shells out to a CLI (npm create vite, dotnet new …).
+
+export type ProjectTemplate = {
+  id: string;
+  language: string;             // 'JavaScript' | 'TypeScript' | 'Java' | 'C#'
+  framework: string;            // 'Plain', 'Express Web API', 'Spring Boot', …
+  description: string;
+  // Hint for the wizard about extra steps the user will need to do.
+  postCreate?: string;          // e.g. "Run `npm install` then `npm start`."
+  requires?: string;            // e.g. "Requires the `dotnet` CLI on PATH."
+};
+
+export type CreateProjectArgs = {
+  templateId: string;
+  destinationDir: string;       // parent directory the project folder is created INSIDE
+  projectName: string;          // becomes the folder name
+};
+
+export type CreateProjectResult = {
+  ok: boolean;
+  projectPath?: string;         // absolute path to the created project folder
+  error?: string;
+};
+
+// Add-package wizard.
+export type PackageProjectType = 'maven' | 'dotnet';
+
+export type DetectedProject = {
+  type: PackageProjectType;
+  // For dotnet, the .csproj file path; for maven, the pom.xml path.
+  projectFile: string;
+  // Display label, e.g. "Maven (pom.xml)" or "WebApp.csproj".
+  label: string;
+};
+
+export type AddPackageArgs = {
+  projectDir: string;
+  type: PackageProjectType;
+  // Maven: "groupId:artifactId" or "groupId:artifactId:version".
+  // .NET: "PackageName" (NuGet package id), with `version` optional.
+  packageId: string;
+  version?: string;
+};
+
+export type AddPackageResult = {
+  ok: boolean;
+  error?: string;
+};

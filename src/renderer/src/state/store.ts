@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatAttachment, ChatMessage, Conversation, DbColumn, ServiceDef, ServiceRuntime } from '../../../shared/types';
+import type { ChatAttachment, ChatMessage, Conversation, DbColumn, DebugLang, DebugStatus, ServiceDef, ServiceRuntime, StackFrame } from '../../../shared/types';
 
 // Renderer-side memory caps. Kept in sync with src/main/limits.ts — the
 // main process is authoritative but we re-cap here so a runaway stream
@@ -35,7 +35,7 @@ export type CenterTab =
   | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string };
 
 export type BottomTabKey = 'terminal' | 'problems' | 'ports' | 'tasks' | 'browser' | 'search';
-export type RightTabKey = 'ai' | 'db' | 'es' | 'log';
+export type RightTabKey = 'ai' | 'db' | 'es' | 'log' | 'debug';
 
 export type LogSeverity = 'debug' | 'info' | 'warn' | 'error';
 export type LogBubble = {
@@ -45,7 +45,7 @@ export type LogBubble = {
   severity: LogSeverity;
   text: string;
 };
-export type ModalKind = null | 'fuzzy' | 'find' | 'service-edit' | 'db-edit' | 'workspace-pick';
+export type ModalKind = null | 'fuzzy' | 'find' | 'service-edit' | 'db-edit' | 'workspace-pick' | 'new-project' | 'add-package';
 
 type Store = {
   workspaceRoot?: string;
@@ -152,6 +152,24 @@ type Store = {
   setEsResult: (r: Store['esResult']) => void;
   esRunRequest: number;
   triggerEsRun: () => void;
+
+  // Debugger — breakpoints are kept per file (1-indexed lines) so they
+  // survive tab switches and editor remount; the rest is per-active-session.
+  breakpoints: Record<string, number[]>;
+  toggleBreakpoint: (path: string, line: number) => void;
+  clearBreakpointsForFile: (path: string) => void;
+  debugSession?: { sessionId: string; lang: DebugLang; status: DebugStatus };
+  setDebugSession: (s: Store['debugSession']) => void;
+  debugPaused?: { reason: string; frames: StackFrame[] };
+  setDebugPaused: (p: Store['debugPaused']) => void;
+  debugSelectedFrameId?: string;
+  selectDebugFrame: (id: string | undefined) => void;
+  debugConsole: string;
+  appendDebugConsole: (chunk: string) => void;
+  clearDebugConsole: () => void;
+  debugWatches: string[];
+  addDebugWatch: (expr: string) => void;
+  removeDebugWatch: (i: number) => void;
 };
 
 const LAYOUT_KEY = 'opendev:layout:v1';
@@ -444,5 +462,36 @@ export const useStore = create<Store>((set, get) => ({
   setEsText: (s) => set({ esText: s }),
   setEsResult: (r) => set({ esResult: r }),
   esRunRequest: 0,
-  triggerEsRun: () => set((s) => ({ esRunRequest: s.esRunRequest + 1 }))
+  triggerEsRun: () => set((s) => ({ esRunRequest: s.esRunRequest + 1 })),
+
+  breakpoints: {},
+  toggleBreakpoint: (path, line) => set((s) => {
+    const cur = s.breakpoints[path] ?? [];
+    const next = cur.includes(line) ? cur.filter((l) => l !== line) : [...cur, line].sort((a, b) => a - b);
+    const all = { ...s.breakpoints };
+    if (next.length === 0) delete all[path];
+    else all[path] = next;
+    return { breakpoints: all };
+  }),
+  clearBreakpointsForFile: (path) => set((s) => {
+    if (!s.breakpoints[path]) return {};
+    const all = { ...s.breakpoints };
+    delete all[path];
+    return { breakpoints: all };
+  }),
+  setDebugSession: (sess) => set({ debugSession: sess }),
+  setDebugPaused: (p) => set((prev) => ({
+    debugPaused: p,
+    debugSelectedFrameId: p?.frames?.[0]?.id ?? prev.debugSelectedFrameId
+  })),
+  selectDebugFrame: (id) => set({ debugSelectedFrameId: id }),
+  debugConsole: '',
+  appendDebugConsole: (chunk) => set((s) => {
+    const next = (s.debugConsole + chunk).slice(-200_000);
+    return { debugConsole: next };
+  }),
+  clearDebugConsole: () => set({ debugConsole: '' }),
+  debugWatches: [],
+  addDebugWatch: (expr) => set((s) => ({ debugWatches: [...s.debugWatches, expr] })),
+  removeDebugWatch: (i) => set((s) => ({ debugWatches: s.debugWatches.filter((_, j) => j !== i) }))
 }));

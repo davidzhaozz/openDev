@@ -18,6 +18,9 @@ import { registerSessionIpc } from './session.js';
 import { registerToolsIpc } from './tools.js';
 import { registerAgentsIpc } from './agents.js';
 import { registerPeersIpc } from './peers.js';
+import { registerDebugIpc } from './debug.js';
+import { registerProjectsIpc } from './projects.js';
+import { registerPackagesIpc } from './packages.js';
 import { ipcMain as electronIpc } from 'electron';
 
 export function registerIpc() {
@@ -57,6 +60,9 @@ export function registerIpc() {
   registerToolsIpc();
   registerAgentsIpc();
   registerPeersIpc();
+  registerDebugIpc();
+  registerProjectsIpc();
+  registerPackagesIpc();
 
   startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
 

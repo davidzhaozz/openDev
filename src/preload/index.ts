@@ -5,14 +5,22 @@ import type {
   AgentRun,
   AgentRunTarget,
   AgentStreamMsg,
+  AddPackageArgs,
+  AddPackageResult,
   AppSettings,
   ChatAttachment,
   Conversation,
+  CreateProjectArgs,
+  CreateProjectResult,
+  DetectedProject,
   DbConnectionProfile,
   DbResult,
   DbRowUpdate,
   DbSchema,
   DbUpdateResult,
+  DebugEventMsg,
+  DebugStartConfig,
+  ProjectTemplate,
   FileChange,
   FileNode,
   GitFileStatus,
@@ -209,6 +217,26 @@ const api = {
     setEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke(IPC.PeersSetEnabled, enabled),
     pushRepo: (peerId: string): Promise<boolean> => ipcRenderer.invoke(IPC.PeersPushRepo, peerId),
     onChanged: (cb: () => void) => on(IPC.PeersChanged, cb)
+  },
+  debug: {
+    start: (config: DebugStartConfig): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke(IPC.DebugStart, config),
+    request: <T = unknown>(command: string, args?: unknown): Promise<T> =>
+      ipcRenderer.invoke(IPC.DebugRequest, command, args),
+    stop: (): Promise<void> => ipcRenderer.invoke(IPC.DebugStop),
+    onEvent: (cb: (e: DebugEventMsg) => void) => on(IPC.DebugEvent, cb)
+  },
+  projects: {
+    list: (): Promise<ProjectTemplate[]> => ipcRenderer.invoke(IPC.ProjectsList),
+    create: (args: CreateProjectArgs): Promise<CreateProjectResult> =>
+      ipcRenderer.invoke(IPC.ProjectsCreate, args),
+    pickDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.ProjectsPickDir),
+    onLog: (cb: (line: string) => void) => on(IPC.ProjectsCreateLog, cb)
+  },
+  packages: {
+    detect: (dir: string): Promise<DetectedProject | null> => ipcRenderer.invoke(IPC.PackagesDetect, dir),
+    add: (args: AddPackageArgs): Promise<AddPackageResult> => ipcRenderer.invoke(IPC.PackagesAdd, args),
+    onLog: (cb: (line: string) => void) => on(IPC.PackagesAddLog, cb)
   },
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path)

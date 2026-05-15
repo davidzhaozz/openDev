@@ -147,6 +147,7 @@ function buildAppMenu() {
     {
       label: 'File',
       submenu: [
+        { label: 'New Project…', accelerator: 'Shift+CmdOrCtrl+N', click: () => sendMenu('new-project') },
         { label: 'Open Project…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-project') },
         { label: 'Close Project', accelerator: 'Shift+CmdOrCtrl+W', click: () => sendMenu('close-project') },
         { type: 'separator' },

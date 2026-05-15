@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore as useGlobalStore } from '../state/store';
 import { DiffView, type DiffMode } from './DiffView';
-import { EditorState, StateEffect, StateField } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, gutter, GutterMarker } from '@codemirror/view';
+import { EditorState, RangeSet, StateEffect, StateField } from '@codemirror/state';
+import { Decoration, type DecorationSet, EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, gutter, GutterMarker } from '@codemirror/view';
 import { useStore } from '../state/store';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap } from '@codemirror/search';
@@ -36,6 +36,8 @@ import { html } from '@codemirror/lang-html';
 import { markdown } from '@codemirror/lang-markdown';
 import { sql } from '@codemirror/lang-sql';
 import { java } from '@codemirror/lang-java';
+import { csharp as csharpLegacy } from '@codemirror/legacy-modes/mode/clike';
+import { StreamLanguage } from '@codemirror/language';
 
 function langForPath(path: string) {
   const ext = path.split('.').pop()?.toLowerCase();
@@ -48,6 +50,7 @@ function langForPath(path: string) {
     case 'md': case 'mdx': return markdown();
     case 'sql': return sql();
     case 'java': return java();
+    case 'cs': case 'csx': return StreamLanguage.define(csharpLegacy);
     default: return javascript();
   }
 }
@@ -126,6 +129,78 @@ const blameGutter = gutter({
   initialSpacer: () => new BlameMarker('0000000 author', '')
 });
 
+// ── Debugger: breakpoint gutter + paused-line decoration ─────────────
+// Breakpoints live as a Set<lineNumber> per editor (1-indexed). The global
+// store also holds them per file path so they survive editor remount and
+// feed the Breakpoints panel; React effects keep the two in sync.
+const setBreakpointsEffect = StateEffect.define<Set<number>>();
+const breakpointField = StateField.define<Set<number>>({
+  create: () => new Set(),
+  update(v, tr) {
+    for (const ef of tr.effects) {
+      if (ef.is(setBreakpointsEffect)) return ef.value;
+    }
+    return v;
+  }
+});
+
+class BreakpointMarker extends GutterMarker {
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = 'cm-bp-marker';
+    return el;
+  }
+}
+class BreakpointSpacer extends GutterMarker {
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = 'cm-bp-spacer';
+    return el;
+  }
+}
+
+// Per-editor factory so the click handler closes over this file's path and
+// can call into the global store directly (no global event needed).
+function makeBreakpointGutter(path: string) {
+  return gutter({
+    class: 'cm-bp-gutter',
+    lineMarker(view, lineBlock) {
+      const lineNo = view.state.doc.lineAt(lineBlock.from).number;
+      return view.state.field(breakpointField).has(lineNo) ? new BreakpointMarker() : null;
+    },
+    lineMarkerChange: (update) => update.transactions.some(tr => tr.effects.some(e => e.is(setBreakpointsEffect))),
+    domEventHandlers: {
+      mousedown(view, line) {
+        const lineNo = view.state.doc.lineAt(line.from).number;
+        useStore.getState().toggleBreakpoint(path, lineNo);
+        return true;
+      }
+    },
+    initialSpacer: () => new BreakpointSpacer()
+  });
+}
+
+// The line where the debugger is currently paused. Cleared when execution
+// resumes or the file shown is different from the paused frame's file.
+const setPausedLineEffect = StateEffect.define<number | null>();
+const pausedLineDeco = Decoration.line({ class: 'cm-paused-line' });
+const pausedLineField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(v, tr) {
+    for (const ef of tr.effects) {
+      if (ef.is(setPausedLineEffect)) {
+        if (ef.value === null) return Decoration.none;
+        try {
+          const pos = tr.state.doc.line(ef.value).from;
+          return RangeSet.of([pausedLineDeco.range(pos)]);
+        } catch { return Decoration.none; }
+      }
+    }
+    return v.map(tr.changes);
+  },
+  provide: (f) => EditorView.decorations.from(f)
+});
+
 type Props = {
   path: string;
   value: string;
@@ -201,6 +276,11 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
     const state = EditorState.create({
       doc: value,
       extensions: [
+        // Breakpoint gutter sits leftmost (before line numbers) so it's the
+        // first column the eye lands on. Click toggles a breakpoint.
+        breakpointField,
+        makeBreakpointGutter(path),
+        pausedLineField,
         lineNumbers(),
         foldGutter(),
         history(),
@@ -365,6 +445,41 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
     } catch {}
     setPendingJump(undefined);
   }, [pendingJump, path, setPendingJump]);
+
+  // Sync this file's breakpoints (from the global store) into the editor's
+  // gutter field. Also, while a debug session is live, push them through to
+  // the running session so they take effect immediately.
+  const fileBreakpoints = useStore(s => s.breakpoints[path]);
+  const debugSession = useStore(s => s.debugSession);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const set = new Set<number>(fileBreakpoints ?? []);
+    view.dispatch({ effects: setBreakpointsEffect.of(set) });
+  }, [fileBreakpoints, path]);
+  useEffect(() => {
+    if (!debugSession || debugSession.status === 'terminated') return;
+    window.opendev.debug.request('setBreakpoints', { path, lines: fileBreakpoints ?? [] }).catch(() => {});
+  }, [fileBreakpoints, path, debugSession]);
+
+  // Highlight + reveal the line where the debugger is paused, but only if
+  // it's in this file. Clear the highlight when execution resumes or the
+  // top frame moves elsewhere.
+  const debugPaused = useStore(s => s.debugPaused);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const top = debugPaused?.frames?.[0];
+    if (top && top.path === path) {
+      view.dispatch({ effects: setPausedLineEffect.of(top.line) });
+      try {
+        const pos = view.state.doc.line(top.line).from;
+        view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+      } catch {}
+    } else {
+      view.dispatch({ effects: setPausedLineEffect.of(null) });
+    }
+  }, [debugPaused, path]);
 
   useEffect(() => {
     const view = viewRef.current;

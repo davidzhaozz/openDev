@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useStore } from '../state/store';
 import type { AppSettings } from '../../../shared/types';
 
 type Props = {
@@ -7,6 +8,7 @@ type Props = {
 };
 
 export function Welcome({ onOpen, onPick }: Props) {
+  const setModal = useStore((s) => s.setModal);
   const [recents, setRecents] = useState<string[]>([]);
 
   useEffect(() => {
@@ -35,6 +37,7 @@ export function Welcome({ onOpen, onPick }: Props) {
 
         <div className="welcome-actions">
           <button className="primary" onClick={() => onPick()}>Open Folder…</button>
+          <button onClick={() => setModal('new-project')}>New Project…</button>
         </div>
 
         <div className="welcome-section-label">Recent</div>

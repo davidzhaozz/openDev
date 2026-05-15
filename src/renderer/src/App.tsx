@@ -5,6 +5,8 @@ import { CodeEditor } from './components/Editor';
 import { TerminalView } from './components/Terminal';
 import { FuzzyFinder } from './components/FuzzyFinder';
 import { FindInFiles } from './components/FindInFiles';
+import { NewProjectModal } from './components/NewProjectModal';
+import { AddPackageModal } from './components/AddPackageModal';
 import { Resizer } from './components/Resizer';
 import { Welcome } from './components/Welcome';
 import { Settings, applyAppearanceSettings } from './components/Settings';
@@ -19,6 +21,7 @@ import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
 import { AgentsPanel } from './panels/AgentsPanel';
 import { AgentRunWorkspace } from './panels/AgentRunWorkspace';
+import { DebugPanel } from './panels/DebugPanel';
 import { DbConnectionsPanel } from './panels/DbConnectionsPanel';
 import { SqlWorkspace } from './panels/SqlWorkspace';
 import { EsWorkspace } from './panels/EsWorkspace';
@@ -189,6 +192,45 @@ export default function App() {
     window.opendev.settings.get().then(applyAppearanceSettings);
   }, []);
 
+  // Bridge debugger events from the main process into the global store. One
+  // subscription for the whole app — the DebugPanel may not be mounted, but
+  // the store needs to stay current (e.g. so the editor's paused-line
+  // decoration shows up immediately).
+  useEffect(() => {
+    const s = useStore.getState();
+    const off = window.opendev.debug.onEvent((e) => {
+      const cur = useStore.getState();
+      switch (e.kind) {
+        case 'session-started':
+          cur.setDebugSession({ sessionId: e.sessionId, lang: e.lang, status: 'running' });
+          // Push every existing breakpoint into the new session.
+          for (const [path, lines] of Object.entries(cur.breakpoints)) {
+            window.opendev.debug.request('setBreakpoints', { path, lines }).catch(() => {});
+          }
+          // Auto-switch the right panel to DEBUG so the user sees it immediately.
+          cur.setRightTab('debug');
+          break;
+        case 'paused':
+          cur.setDebugPaused({ reason: e.reason, frames: e.frames });
+          if (cur.debugSession) cur.setDebugSession({ ...cur.debugSession, status: 'paused' });
+          break;
+        case 'resumed':
+          cur.setDebugPaused(undefined);
+          if (cur.debugSession) cur.setDebugSession({ ...cur.debugSession, status: 'running' });
+          break;
+        case 'output':
+          cur.appendDebugConsole(e.text);
+          break;
+        case 'terminated':
+          cur.setDebugPaused(undefined);
+          cur.setDebugSession(undefined);
+          break;
+      }
+    });
+    void s;
+    return off;
+  }, []);
+
   // Pick the right center workspace based on which right-panel tab is open.
   useEffect(() => {
     if (rightTab === 'db') openSqlTab();
@@ -206,6 +248,8 @@ export default function App() {
         setRoot(undefined); setWorkspaceRoot(undefined);
       } else if (action === 'settings') {
         setShowSettings(true);
+      } else if (action === 'new-project') {
+        setModal('new-project');
       }
     });
     return off;
@@ -448,6 +492,7 @@ export default function App() {
               })}
               {tabs.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--fg-3)', fontSize: 11 }}>Cmd+P to find a file • Cmd+` for terminal</div>}
             </div>
+            <DebugToolbar active={active} setRightTab={setRightTab} />
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, background: 'var(--bg-0)' }}>
               {!active && (
                 <div className="empty-state">
@@ -504,11 +549,12 @@ export default function App() {
               ['ai', 'AI'],
               ['db', 'DB'],
               ['es', 'ES'],
-              ['log', 'LOG']
+              ['log', 'LOG'],
+              ['debug', 'DEBUG']
             ].map(([k, label]) => (
               <div key={k}
                 className={`right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'log')}>{label}</div>
+                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'log' | 'debug')}>{label}</div>
             ))}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -524,6 +570,9 @@ export default function App() {
             <div style={{ flex: 1, minHeight: 0, display: rightTab === 'log' ? 'flex' : 'none', flexDirection: 'column' }}>
               <LogPanel />
             </div>
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'debug' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <DebugPanel />
+            </div>
           </div>
           {/* Bottom-of-right-column: AI Agents panel, vertically split off */}
           <Resizer orientation="horizontal" value={layout.agentsH} min={120} max={600}
@@ -537,6 +586,12 @@ export default function App() {
 
       {modal === 'fuzzy' && <FuzzyFinder />}
       {modal === 'find' && <FindInFiles />}
+      {modal === 'new-project' && <NewProjectModal onClose={() => setModal(null)} />}
+      {modal === 'add-package' && (() => {
+        const dir = (useStore.getState().modalPayload as { dir?: string } | undefined)?.dir;
+        if (!dir) return null;
+        return <AddPackageModal dir={dir} onClose={() => setModal(null)} />;
+      })()}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       {installPrompt && (
         <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
@@ -600,6 +655,48 @@ export default function App() {
       })()}
 
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+// Slim toolbar above the editor: a "Debug" button when the active tab is a
+// debuggable JS file, and the step controls whenever a session is live.
+function DebugToolbar({ active, setRightTab }: { active: ReturnType<typeof useStore.getState>['centerTabs'][number] | undefined; setRightTab: (k: 'ai' | 'db' | 'es' | 'log' | 'debug') => void }) {
+  const session = useStore((s) => s.debugSession);
+  const paused = useStore((s) => s.debugPaused);
+  const showToast = useStore((s) => s.showToast);
+  const isJsFile = active?.kind === 'file' && /\.(m?js|cjs)$/i.test(active.path);
+  if (!session && !isJsFile) return null;
+  const startNode = async () => {
+    if (!isJsFile || active?.kind !== 'file') return;
+    try {
+      await window.opendev.debug.start({ lang: 'node', file: active.path });
+    } catch (err) {
+      showToast(`Debug start failed: ${(err as Error).message}`, 5000);
+    }
+  };
+  const cmd = (command: string) => () => {
+    window.opendev.debug.request(command, {}).catch((e) => showToast(`${command} failed: ${e?.message || e}`, 4000));
+  };
+  return (
+    <div className="debug-toolbar">
+      {!session && isJsFile && (
+        <button className="dbg-debug" onClick={startNode}>▶ Debug</button>
+      )}
+      {session && (
+        <>
+          <span className={`dbg-status ${session.status}`}>{session.status}</span>
+          {paused
+            ? <button className="dbg-btn" title="Continue (resume)" onClick={cmd('continue')}>▶</button>
+            : <button className="dbg-btn" title="Pause" onClick={cmd('pause')}>⏸</button>}
+          <button className="dbg-btn" title="Step Over" onClick={cmd('stepOver')} disabled={!paused}>⤼</button>
+          <button className="dbg-btn" title="Step Into" onClick={cmd('stepInto')} disabled={!paused}>⤷</button>
+          <button className="dbg-btn" title="Step Out" onClick={cmd('stepOut')} disabled={!paused}>⤴</button>
+          <button className="dbg-btn stop" title="Stop" onClick={() => window.opendev.debug.stop()}>⏹</button>
+          <span style={{ flex: 1 }} />
+          <button className="dbg-btn link" onClick={() => setRightTab('debug')}>open DEBUG panel →</button>
+        </>
+      )}
     </div>
   );
 }
