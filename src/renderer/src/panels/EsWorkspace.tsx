@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import { Resizer } from '../components/Resizer';
 import { JsonTree } from '../components/JsonTree';
+import { QueryHistoryButton } from '../components/QueryHistoryButton';
 
 function parseRequest(text: string): { method: string; path: string; body?: unknown; parseError?: string } {
   const trimmed = text.trim();
@@ -32,6 +33,7 @@ export function EsWorkspace() {
   const layout = useStore(s => s.layout);
   const setLayout = useStore(s => s.setLayout);
   const [running, setRunning] = useState(false);
+  const [historyTick, setHistoryTick] = useState(0);
   const lastRunRequest = useRef(0);
 
   const run = async () => {
@@ -39,13 +41,33 @@ export function EsWorkspace() {
     const parsed = parseRequest(esText);
     if (parsed.parseError) { setEsResult({ error: parsed.parseError }); return; }
     setRunning(true);
+    const startedAt = Date.now();
+    let ok = false;
+    let status: number | undefined;
+    let durationMs: number | undefined;
     try {
       const r = await window.opendev.db.esRequest(sqlConnId, { method: parsed.method, path: parsed.path, body: parsed.body });
       setEsResult(r);
+      ok = true;
+      status = r.status;
+      durationMs = r.durationMs;
     } catch (e: any) {
       setEsResult({ error: e?.message || String(e) });
     } finally {
       setRunning(false);
+      // Record after the run completes so we capture status/duration. Don't
+      // let a history-write failure surface to the user — it's best-effort.
+      window.opendev.history.append('es', {
+        id: `h-${startedAt}-${Math.random().toString(36).slice(2, 8)}`,
+        text: esText,
+        runAt: startedAt,
+        ok,
+        durationMs: durationMs ?? (Date.now() - startedAt),
+        status,
+        connId: sqlConnId,
+        esMethod: parsed.method,
+        esPath: parsed.path
+      }).then(() => setHistoryTick((t) => t + 1)).catch(() => {});
     }
   };
 
@@ -66,6 +88,7 @@ export function EsWorkspace() {
       <div className="sql-toolbar">
         <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : 'Send ⌘↵'}</button>
         <span className="es-meta">{parsed.method} {parsed.path}</span>
+        <QueryHistoryButton kind="es" refreshKey={historyTick} onPick={(text) => setEsText(text)} />
         <span className="grow" />
         <span className="sql-status">
           {sqlConnId ? `connected · ${sqlConnId.slice(0, 8)}` : 'no connection'}

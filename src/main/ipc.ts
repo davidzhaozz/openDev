@@ -21,6 +21,7 @@ import { registerPeersIpc } from './peers.js';
 import { registerDebugIpc } from './debug.js';
 import { registerProjectsIpc } from './projects.js';
 import { registerPackagesIpc } from './packages.js';
+import { registerHistoryIpc } from './queryHistory.js';
 import { ipcMain as electronIpc } from 'electron';
 
 export function registerIpc() {
@@ -63,6 +64,7 @@ export function registerIpc() {
   registerDebugIpc();
   registerProjectsIpc();
   registerPackagesIpc();
+  registerHistoryIpc();
 
   startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
 

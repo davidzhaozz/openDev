@@ -339,3 +339,23 @@ export type AddPackageResult = {
   ok: boolean;
   error?: string;
 };
+
+// ── Query history ─────────────────────────────────────────────────────
+// Persistent per-workspace history for the SQL and ES workspaces. Saved
+// to .opendev/<key>-history.json (key='sql'|'es'), capped to the most
+// recent N entries.
+
+export type QueryHistoryKind = 'sql' | 'es';
+
+export type QueryHistoryEntry = {
+  id: string;
+  text: string;            // the full query / request
+  runAt: number;           // epoch ms
+  ok: boolean;             // false if the run errored
+  durationMs?: number;
+  rowCount?: number;       // SQL
+  status?: number;         // ES HTTP status
+  connId?: string;         // connection used
+  esMethod?: string;       // ES — for the dropdown preview
+  esPath?: string;
+};

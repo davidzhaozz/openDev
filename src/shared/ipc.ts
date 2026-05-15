@@ -153,6 +153,11 @@ export const IPC = {
   PackagesAdd: 'packages:add',
   PackagesAddLog: 'packages:add-log',     // main → renderer (progress)
 
+  // query history (sql + es)
+  HistoryRead: 'history:read',
+  HistoryAppend: 'history:append',
+  HistoryClear: 'history:clear',
+
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning'
 } as const;

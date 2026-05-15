@@ -8,6 +8,8 @@ import type {
   AddPackageArgs,
   AddPackageResult,
   AppSettings,
+  QueryHistoryEntry,
+  QueryHistoryKind,
   ChatAttachment,
   Conversation,
   CreateProjectArgs,
@@ -237,6 +239,14 @@ const api = {
     detect: (dir: string): Promise<DetectedProject | null> => ipcRenderer.invoke(IPC.PackagesDetect, dir),
     add: (args: AddPackageArgs): Promise<AddPackageResult> => ipcRenderer.invoke(IPC.PackagesAdd, args),
     onLog: (cb: (line: string) => void) => on(IPC.PackagesAddLog, cb)
+  },
+  history: {
+    read: (kind: QueryHistoryKind): Promise<QueryHistoryEntry[]> =>
+      ipcRenderer.invoke(IPC.HistoryRead, kind),
+    append: (kind: QueryHistoryKind, entry: QueryHistoryEntry): Promise<QueryHistoryEntry[]> =>
+      ipcRenderer.invoke(IPC.HistoryAppend, kind, entry),
+    clear: (kind: QueryHistoryKind): Promise<void> =>
+      ipcRenderer.invoke(IPC.HistoryClear, kind)
   },
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path)

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useStore } from '../state/store';
 import { Resizer } from '../components/Resizer';
+import { QueryHistoryButton } from '../components/QueryHistoryButton';
 
 function formatCell(v: unknown): ReactNode {
   if (v === null || v === undefined) return <em className="null">null</em>;
@@ -74,6 +75,7 @@ export function SqlWorkspace() {
   const sqlRunRequest = useStore(s => s.sqlRunRequest);
   const showToast = useStore(s => s.showToast);
   const [running, setRunning] = useState(false);
+  const [historyTick, setHistoryTick] = useState(0);
   const lastRunRequest = useRef(0);
 
   // Dirty state: rowIndex → (colIndex → new typed value).
@@ -88,9 +90,16 @@ export function SqlWorkspace() {
     if (!sqlConnId) { setSqlResult({ error: 'No connection selected — pick one in the right panel.' }); return; }
     if (!sqlText.trim()) return;
     setRunning(true);
+    const startedAt = Date.now();
+    let ok = false;
+    let durationMs: number | undefined;
+    let rowCount: number | undefined;
     try {
       const r = await window.opendev.db.query(sqlConnId, sqlText);
       setSqlResult(r);
+      ok = true;
+      durationMs = r.durationMs;
+      rowCount = r.rowCount;
       // Fresh data — drop any pending edits since row indices may shift.
       setDirty({});
       setSaveErrors([]);
@@ -98,6 +107,16 @@ export function SqlWorkspace() {
       setSqlResult({ error: e?.message || String(e) });
     } finally {
       setRunning(false);
+      // Best-effort persistent history; never let a write failure surface.
+      window.opendev.history.append('sql', {
+        id: `h-${startedAt}-${Math.random().toString(36).slice(2, 8)}`,
+        text: sqlText,
+        runAt: startedAt,
+        ok,
+        durationMs: durationMs ?? (Date.now() - startedAt),
+        rowCount,
+        connId: sqlConnId
+      }).then(() => setHistoryTick((t) => t + 1)).catch(() => {});
     }
   };
 
@@ -257,6 +276,7 @@ export function SqlWorkspace() {
     <div className="sql-workspace">
       <div className="sql-toolbar">
         <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : 'Run ⌘↵'}</button>
+        <QueryHistoryButton kind="sql" refreshKey={historyTick} onPick={(text) => setSqlText(text)} />
         <span className="grow" />
         <span className="sql-status">
           {sqlConnId ? `connected · ${sqlConnId.slice(0, 8)}` : 'no connection'}
