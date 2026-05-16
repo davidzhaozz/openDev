@@ -52,7 +52,11 @@ export default function App() {
   const setLayout = useStore(s => s.setLayout);
   const [showSettings, setShowSettings] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<{ hasBrew: boolean } | null>(null);
-  const tabDragRef = useRef<{ id: string; path: string; startX: number; startY: number; outside: boolean } | null>(null);
+  const tabDragRef = useRef<
+    | { kind: 'file'; id: string; path: string; startX: number; startY: number; outside: boolean }
+    | { kind: 'ai'; id: string; conversationId?: string; name: string; startX: number; startY: number; outside: boolean }
+    | null
+  >(null);
 
   // Track when a drag leaves/enters the IDE window. `dragleave` on the
   // document with `relatedTarget === null` is the Chromium signal that the
@@ -417,16 +421,22 @@ export default function App() {
                   <div
                     key={t.id}
                     className={`tab ${activeId === t.id ? 'active' : ''}`}
-                    draggable={!isRenaming && t.kind === 'file'}
+                    draggable={!isRenaming && (t.kind === 'file' || t.kind === 'ai')}
                     onClick={() => !isRenaming && setActive(t.id)}
                     onDragStart={(e) => {
-                      if (t.kind !== 'file') return;
-                      e.dataTransfer.effectAllowed = 'move';
-                      e.dataTransfer.setData('text/uri-list', `file://${t.path}`);
-                      tabDragRef.current = { id: t.id, path: t.path, startX: e.screenX, startY: e.screenY, outside: false };
+                      if (t.kind === 'file') {
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/uri-list', `file://${t.path}`);
+                        tabDragRef.current = { kind: 'file', id: t.id, path: t.path, startX: e.screenX, startY: e.screenY, outside: false };
+                      } else if (t.kind === 'ai') {
+                        e.dataTransfer.effectAllowed = 'move';
+                        // Some non-empty payload is needed for Electron to
+                        // actually fire dragend/dragleave events reliably.
+                        e.dataTransfer.setData('text/plain', t.name);
+                        tabDragRef.current = { kind: 'ai', id: t.id, conversationId: t.conversationId, name: t.name, startX: e.screenX, startY: e.screenY, outside: false };
+                      }
                     }}
                     onDragEnd={(e) => {
-                      if (t.kind !== 'file') return;
                       const state = tabDragRef.current;
                       tabDragRef.current = null;
                       if (!state) return;
@@ -439,13 +449,19 @@ export default function App() {
                       // is more reliable than coord math on Electron/macOS.
                       const shouldTear = state.outside && traveled > 40;
                       if (!shouldTear) return;
-                      const path = state.path;
                       const id = state.id;
                       // Defer so Electron finishes tearing down the drag image
                       // before we spawn a window and unmount the editor.
                       setTimeout(() => {
                         try {
-                          window.opendev.window.popoutFile(path);
+                          if (state.kind === 'file') {
+                            window.opendev.window.popoutFile(state.path);
+                          } else {
+                            window.opendev.window.popoutAi({
+                              conversationId: state.conversationId,
+                              name: state.name
+                            });
+                          }
                           closeTab(id);
                         } catch (err) {
                           console.error('popout failed', err);
@@ -487,6 +503,22 @@ export default function App() {
                           const path = t.path;
                           const id = t.id;
                           window.opendev.window.popoutFile(path);
+                          closeTab(id);
+                        }}
+                      >⎘</span>
+                    )}
+                    {t.kind === 'ai' && (
+                      <span
+                        className="tab-detach"
+                        title="Open in new window"
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const convId = t.conversationId;
+                          const name = t.name;
+                          const id = t.id;
+                          window.opendev.window.popoutAi({ conversationId: convId, name });
                           closeTab(id);
                         }}
                       >⎘</span>

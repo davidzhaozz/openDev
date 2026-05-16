@@ -1,11 +1,14 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { Popout } from './Popout';
+import { PopoutAi } from './PopoutAi';
 import './styles/global.css';
 
 const root = createRoot(document.getElementById('root')!);
 const params = new URLSearchParams(location.search);
-const popoutPath = params.get('popout') === '1' ? params.get('path') : null;
+const popoutFlag = params.get('popout');
+const popoutPath = popoutFlag === '1' ? params.get('path') : null;
+const popoutAi = popoutFlag === 'ai';
 
 function ApiMissing() {
   return (
@@ -28,6 +31,14 @@ if (typeof (window as unknown as { opendev?: unknown }).opendev === 'undefined')
   root.render(<ApiMissing />);
 } else if (popoutPath) {
   root.render(<Popout path={popoutPath} />);
+} else if (popoutAi) {
+  root.render(
+    <PopoutAi
+      conversationId={params.get('convId') || undefined}
+      initialName={params.get('name') || undefined}
+      initialPrompt={params.get('prompt') || undefined}
+    />
+  );
 } else {
   root.render(<App />);
 }

@@ -75,4 +75,10 @@ export function registerIpc() {
     createPopoutWindow(path);
     return true;
   });
+
+  electronIpc.handle(IPC.WindowPopoutAi, async (_e, opts: { conversationId?: string; name?: string; initialPrompt?: string } = {}) => {
+    const { createPopoutAiWindow } = await import('./windows.js');
+    createPopoutAiWindow(opts);
+    return true;
+  });
 }

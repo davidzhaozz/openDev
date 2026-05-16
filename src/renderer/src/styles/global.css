@@ -649,13 +649,19 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   min-height: var(--row-h);
   padding: 1px 6px;
   cursor: pointer;
-  white-space: nowrap;
   font-size: inherit;
+  /* min-width:0 lets the row shrink below its content so the children
+     (which carry the truncation rules) can ellipsize instead of pushing
+     the row wider than the column. overflow:hidden clips anything that
+     still leaks so hover/select highlights stay column-shaped. */
+  min-width: 0;
+  overflow: hidden;
 }
 .tree-row:hover { background: var(--bg-hover); }
 .tree-row.selected { background: var(--bg-active); color: white; }
 .tree-row .icon {
   display: inline-block;
+  flex: 0 0 14px;
   width: 14px; text-align: center;
   color: var(--fg-2);
   margin-right: 4px;
@@ -664,9 +670,17 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   font-weight: 700;
 }
 .tree-row.selected .icon { color: white; }
-.tree-name { flex: 0 0 auto; }
+.tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tree-git {
+  flex: 0 0 auto;
   margin-left: 8px;
+  max-width: 45%;
   /* Always solid — git branch chip should be legible regardless of the
      workspace transparency setting. */
   color: #9be9c7;

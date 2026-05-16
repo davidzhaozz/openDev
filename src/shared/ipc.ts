@@ -100,6 +100,7 @@ export const IPC = {
   SessionSave: 'session:save',
   SessionLoad: 'session:load',
   WindowPopoutFile: 'window:popout-file',
+  WindowPopoutAi: 'window:popout-ai',
   GitWorktreeCreate: 'git:worktree-create',
   GitWorktreeList: 'git:worktree-list',
   GitWorktreeRemove: 'git:worktree-remove',

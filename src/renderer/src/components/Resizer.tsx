@@ -20,6 +20,25 @@ export function Resizer({ orientation, value, onChange, min = 100, max = 1200, i
     let startPos = 0;
     let startVal = 0;
     let dragging = false;
+    // Full-window scrim added during a drag. The browser webview and any
+    // other native child surface (xterm, etc.) swallow mouse events when the
+    // cursor passes over them — without this overlay, mouseup never reaches
+    // us and the resizer gets stuck following the cursor forever.
+    let scrim: HTMLDivElement | null = null;
+
+    const teardown = () => {
+      dragging = false;
+      document.body.style.userSelect = '';
+      if (scrim) {
+        scrim.removeEventListener('mousemove', onMove);
+        scrim.removeEventListener('mouseup', onUp);
+        scrim.remove();
+        scrim = null;
+      }
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+    };
 
     const onMove = (e: MouseEvent) => {
       if (!dragging) return;
@@ -28,28 +47,30 @@ export function Resizer({ orientation, value, onChange, min = 100, max = 1200, i
       const next = Math.max(min, Math.min(max, startVal + delta));
       onChange(next);
     };
-    const onUp = () => {
-      dragging = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
+    const onUp = () => { teardown(); };
     const onDown = (e: MouseEvent) => {
       e.preventDefault();
       dragging = true;
       startPos = orientation === 'vertical' ? e.clientX : e.clientY;
       startVal = stateRef.current.value;
-      document.body.style.cursor = orientation === 'vertical' ? 'col-resize' : 'row-resize';
       document.body.style.userSelect = 'none';
+
+      scrim = document.createElement('div');
+      scrim.style.cssText = `position:fixed;inset:0;z-index:2147483647;cursor:${orientation === 'vertical' ? 'col-resize' : 'row-resize'};background:transparent;`;
+      scrim.addEventListener('mousemove', onMove);
+      scrim.addEventListener('mouseup', onUp);
+      document.body.appendChild(scrim);
+      // Window-level fallbacks: if the OS yanks focus (cmd-tab, etc.) mid-drag
+      // we still want to release. `blur` covers that; the window-level
+      // mouseup is belt-and-braces in case the scrim somehow misses it.
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
     };
     el.addEventListener('mousedown', onDown);
     return () => {
       el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      teardown();
     };
   }, [orientation]);
 

@@ -251,7 +251,9 @@ const api = {
       ipcRenderer.invoke(IPC.HistoryClear, kind)
   },
   window: {
-    popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path)
+    popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path),
+    popoutAi: (opts?: { conversationId?: string; name?: string; initialPrompt?: string }): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {})
   },
   tools: {
     check: (): Promise<{ npm: boolean; node: boolean; brew: boolean; git: boolean; npmVersion?: string; nodeVersion?: string }> =>
