@@ -192,33 +192,32 @@ export function BrowserPanel({ initialUrl, onNavigate }: { initialUrl?: string; 
           </button>
         )}
       </div>
-      {isFullSize ? (
-        <div style={{ flex: 1, minHeight: 0 }}>
+      {/* Single tree so the <webview> keeps its DOM identity across
+          desktop ↔ device-emulation switches. Conditionally rendering two
+          different parents would unmount/remount the webview, and the
+          resulting WebContents teardown + re-attach crashes the renderer
+          (reproed switching from Desktop to iPhone 14 Pro Max). */}
+      <div className={isFullSize ? 'browser-viewport-full' : 'browser-stage'}>
+        <div
+          className="browser-frame"
+          style={isFullSize
+            ? { width: '100%', height: '100%', borderRadius: 0, boxShadow: 'none' }
+            : { width: vw!, height: vh! }}
+        >
+          {!isFullSize && (
+            <div className="browser-frame-label">
+              {preset.label}{rotated ? ' (landscape)' : ''} · {vw}×{vh}
+            </div>
+          )}
           <webview
+            key="browser-webview"
             ref={wvRef}
             src={url}
             style={{ width: '100%', height: '100%', background: '#fff' }}
             {...({ allowpopups: 'true' } as Record<string, string>)}
           />
         </div>
-      ) : (
-        <div className="browser-stage">
-          <div
-            className="browser-frame"
-            style={{ width: vw!, height: vh! }}
-          >
-            <div className="browser-frame-label">
-              {preset.label}{rotated ? ' (landscape)' : ''} · {vw}×{vh}
-            </div>
-            <webview
-              ref={wvRef}
-              src={url}
-              style={{ width: '100%', height: '100%', background: '#fff' }}
-              {...({ allowpopups: 'true' } as Record<string, string>)}
-            />
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

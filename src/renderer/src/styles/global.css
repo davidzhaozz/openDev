@@ -2018,6 +2018,14 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
     repeating-conic-gradient(rgba(255,255,255,0.02) 0 25%, transparent 0 50%) 0 0 / 16px 16px,
     var(--bg-0);
 }
+/* Full-size mode — same parent shape as the stage so the <webview> child
+   keeps its DOM identity across the toggle (no remount, no renderer
+   crash). The frame inside drops its rounded chrome via inline styles. */
+.browser-viewport-full {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 .browser-frame {
   position: relative;
   flex: 0 0 auto;
