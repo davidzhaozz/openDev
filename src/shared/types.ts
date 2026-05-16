@@ -46,7 +46,7 @@ export type ChatAttachment =
   | { kind: 'picked-element'; cssPath: string; outerHTML: string; styles: Record<string, string>; screenshotDataUrl?: string }
   | { kind: 'file'; name: string; mimeType: string; size: number; text?: string; dataUrl?: string };
 
-export type ChatProvider = 'claude' | 'codex';
+export type ChatProvider = 'claude' | 'codex' | 'opencode';
 
 export type ChatMessage = {
   id: string;
@@ -183,6 +183,17 @@ export type AppSettings = {
   // on the wire in cleartext (only HMAC'd). Linking is opt-in.
   linkKey?: string;
   linkingEnabled?: boolean;
+
+  // Local AI (OpenCode CLI). When enabled, the AIChat transport dropdown
+  // adds "OpenCode (local)" and uses the configured binary + base URL +
+  // model. OpenCode itself reads ~/.config/opencode/config.toml; these
+  // fields are passed as --base-url / --model / --api-key overrides on
+  // every invocation, so the IDE's setting is authoritative.
+  aiLocalEnabled?: boolean;
+  aiLocalBinPath?: string;       // absolute path to the opencode binary, or "opencode" to use PATH
+  aiLocalBaseUrl?: string;       // OpenAI-compatible endpoint, e.g. http://localhost:11434/v1
+  aiLocalModel?: string;         // e.g. "llama3:8b", "qwen2.5-coder:14b"
+  aiLocalApiKey?: string;        // optional — Ollama doesn't need one
 };
 
 // ── AI Agents ──────────────────────────────────────────────────────────
@@ -356,7 +367,7 @@ export type AddPackageResult = {
 // to .opendev/<key>-history.json (key='sql'|'es'), capped to the most
 // recent N entries.
 
-export type QueryHistoryKind = 'sql' | 'es';
+export type QueryHistoryKind = 'sql' | 'es' | 'rest';
 
 export type QueryHistoryEntry = {
   id: string;
@@ -365,8 +376,60 @@ export type QueryHistoryEntry = {
   ok: boolean;             // false if the run errored
   durationMs?: number;
   rowCount?: number;       // SQL
-  status?: number;         // ES HTTP status
-  connId?: string;         // connection used
+  status?: number;         // ES/REST HTTP status
+  connId?: string;         // connection used (SQL/ES); for REST this carries the saved request id when applicable
   esMethod?: string;       // ES — for the dropdown preview
   esPath?: string;
+  restMethod?: string;     // REST — for the dropdown preview
+  restUrl?: string;
 };
+
+// ---------------------------------------------------------------------------
+// REST client
+// ---------------------------------------------------------------------------
+
+export type RestMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+export type RestAuth =
+  | { kind: 'none' }
+  | { kind: 'bearer'; token: string }
+  | { kind: 'basic'; username: string; password: string };
+
+export type RestHeader = { key: string; value: string; enabled?: boolean };
+export type RestParam = { key: string; value: string; enabled?: boolean };
+
+export type RestBody =
+  | { kind: 'none' }
+  | { kind: 'json'; text: string }
+  | { kind: 'text'; text: string; contentType?: string }
+  | { kind: 'form'; fields: Array<{ key: string; value: string; enabled?: boolean }> };
+
+export type RestRequestSpec = {
+  method: RestMethod;
+  url: string;
+  headers: RestHeader[];
+  params: RestParam[];
+  body: RestBody;
+  auth: RestAuth;
+};
+
+export type RestSavedRequest = RestRequestSpec & {
+  id: string;
+  name: string;
+  folder?: string;
+  updatedAt: number;
+};
+
+export type RestResponse = {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: Array<[string, string]>;
+  body: string;           // raw text; renderer pretty-prints JSON when content-type allows
+  contentType?: string;
+  durationMs: number;
+  sizeBytes: number;
+  url: string;            // final URL after query-string assembly
+};
+
+export type RestResult = RestResponse | { error: string };

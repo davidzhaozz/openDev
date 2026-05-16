@@ -14,6 +14,9 @@ import type {
   ToolInstallResult,
   ChatAttachment,
   Conversation,
+  RestRequestSpec,
+  RestResult,
+  RestSavedRequest,
   CreateProjectArgs,
   CreateProjectResult,
   DetectedProject,
@@ -99,7 +102,7 @@ const api = {
     onDiagnostics: (cb: (p: any) => void) => on(IPC.LspDiagnostics, cb)
   },
   ai: {
-    send: (args: { conversationId?: string; text: string; attachments?: ChatAttachment[]; transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'sdk' | 'cli'; context?: unknown }):
+    send: (args: { conversationId?: string; text: string; attachments?: ChatAttachment[]; transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli'; context?: unknown }):
       Promise<{ conversationId: string; streamId: string }> => ipcRenderer.invoke(IPC.AiSend, args),
     cancel: (streamId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiCancel, streamId),
     onStream: (cb: (msg: { streamId: string; chunk?: string; done?: boolean; full?: string }) => void) =>
@@ -107,6 +110,12 @@ const api = {
     conversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.AiConversations),
     conversation: (id: string): Promise<Conversation | null> => ipcRenderer.invoke(IPC.AiConversationGet, id),
     deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id)
+  },
+  aiLocal: {
+    listModels: (): Promise<
+      | { ok: true; models: Array<{ id: string; size?: number; modifiedAt?: string }>; source: 'openai' | 'ollama'; baseUrl: string }
+      | { ok: false; error: string; baseUrl: string }
+    > => ipcRenderer.invoke(IPC.AiLocalListModels)
   },
   mcp: {
     status: (): Promise<{ running: boolean; url?: string; port?: number; error?: string }> => ipcRenderer.invoke(IPC.McpStatus),
@@ -249,6 +258,12 @@ const api = {
       ipcRenderer.invoke(IPC.HistoryAppend, kind, entry),
     clear: (kind: QueryHistoryKind): Promise<void> =>
       ipcRenderer.invoke(IPC.HistoryClear, kind)
+  },
+  rest: {
+    send: (spec: RestRequestSpec): Promise<RestResult> => ipcRenderer.invoke(IPC.RestSend, spec),
+    listSaved: (): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestListSaved),
+    save: (req: RestSavedRequest): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestSave, req),
+    delete: (id: string): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestDelete, id)
   },
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path),

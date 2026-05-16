@@ -37,6 +37,7 @@ export const IPC = {
   AiConversationGet: 'ai:conversation-get',
   AiConversationDelete: 'ai:conversation-delete',
   AiCancel: 'ai:cancel',
+  AiLocalListModels: 'ai-local:list-models',
 
   // mcp
   McpStatus: 'mcp:status',
@@ -154,10 +155,16 @@ export const IPC = {
   PackagesAdd: 'packages:add',
   PackagesAddLog: 'packages:add-log',     // main → renderer (progress)
 
-  // query history (sql + es)
+  // query history (sql + es + rest)
   HistoryRead: 'history:read',
   HistoryAppend: 'history:append',
   HistoryClear: 'history:clear',
+
+  // rest client
+  RestSend: 'rest:send',
+  RestListSaved: 'rest:list-saved',
+  RestSave: 'rest:save',
+  RestDelete: 'rest:delete',
 
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning'

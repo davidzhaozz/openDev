@@ -27,6 +27,8 @@ import { listDir, walkAllFiles } from './fs.js';
 import { listListeningPorts } from './ports.js';
 import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
+import { restApi } from './rest.js';
+import type { RestSavedRequest } from '@shared/types';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
@@ -67,7 +69,38 @@ const TOOLS: ToolDef[] = [
   { name: 'ide_editor_state', description: 'Return the renderer-side editor state: active tab, all open tabs, optional selected text. May be stale by up to a few hundred milliseconds.', inputSchema: { type: 'object', properties: {} } },
   { name: 'ide_open_file', description: 'Open a file in the editor (creating a tab) and optionally place the cursor at a position.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path'] } },
   { name: 'ide_list_agents', description: 'List the AI agents available in this workspace — built-in agents (security-scan, code-quality, todo-collector, design-gallery) plus any the user created or imported. Returns each agent\'s slug, name, description, and runtime.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'ide_run_agent', description: 'Run an AI agent by slug against the current workspace and return its full output once it finishes. Agents are self-contained Node.js apps; output is plain text or a complete HTML document. Use ide_list_agents first to see available slugs.', inputSchema: { type: 'object', properties: { slug: { type: 'string', description: 'The agent slug from ide_list_agents.' }, timeoutMs: { type: 'number', description: 'Max run time in ms (default 120000, max 600000).' } }, required: ['slug'] } }
+  { name: 'ide_run_agent', description: 'Run an AI agent by slug against the current workspace and return its full output once it finishes. Agents are self-contained Node.js apps; output is plain text or a complete HTML document. Use ide_list_agents first to see available slugs.', inputSchema: { type: 'object', properties: { slug: { type: 'string', description: 'The agent slug from ide_list_agents.' }, timeoutMs: { type: 'number', description: 'Max run time in ms (default 120000, max 600000).' } }, required: ['slug'] } },
+
+  // REST client — let the AI hit any HTTP endpoint and manage the user's saved-request collection.
+  { name: 'ide_rest_send', description: 'Send an arbitrary HTTP request from the IDE\'s REST client. Returns status, headers, and body. Supports JSON / raw / form bodies and bearer/basic auth.', inputSchema: { type: 'object', properties: {
+    method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] },
+    url: { type: 'string' },
+    headers: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } }, required: ['key', 'value'] } },
+    params: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } }, required: ['key', 'value'] } },
+    body: { type: 'object', description: 'One of {kind:"none"} | {kind:"json", text:string} | {kind:"text", text:string, contentType?:string} | {kind:"form", fields:[{key,value,enabled?}]}.' },
+    auth: { type: 'object', description: 'One of {kind:"none"} | {kind:"bearer", token} | {kind:"basic", username, password}.' }
+  }, required: ['method', 'url'] } },
+  { name: 'ide_rest_list_saved', description: 'List the saved REST requests in this workspace (the right-panel REST collection).', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_rest_get_saved', description: 'Return one saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_rest_save', description: 'Save (create or update) a REST request to the workspace collection. Pass an existing id to update, or omit it to create a fresh entry — a new id will be assigned and returned.', inputSchema: { type: 'object', properties: {
+    id: { type: 'string', description: 'Existing saved-request id, or omit to create new.' },
+    name: { type: 'string' },
+    folder: { type: 'string' },
+    method: { type: 'string' },
+    url: { type: 'string' },
+    headers: { type: 'array' },
+    params: { type: 'array' },
+    body: { type: 'object' },
+    auth: { type: 'object' }
+  }, required: ['name', 'method', 'url'] } },
+  { name: 'ide_rest_delete', description: 'Delete a saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_rest_open_saved', description: 'Open a saved REST request in the center workspace, optionally sending it immediately. Use with id from ide_rest_list_saved.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, send: { type: 'boolean', description: 'If true, fire the request as soon as it loads.' } }, required: ['id'] } },
+
+  // IDE panel control — the right column hosts AI/DB/ES/REST; the bottom application bar hosts LOG/DEBUG. The AI can drive both.
+  { name: 'ide_set_right_tab', description: 'Switch the right-panel tab. Valid values: "ai", "db", "es", "rest".', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ai', 'db', 'es', 'rest'] } }, required: ['tab'] } },
+  { name: 'ide_get_right_tab', description: 'Return which right-panel tab is currently selected.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_set_bottom_tab', description: 'Switch the bottom application-bar tab. Valid values: "log", "debug". Expands the bar if collapsed.', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['log', 'debug'] } }, required: ['tab'] } },
+  { name: 'ide_get_bottom_tab', description: 'Return which bottom-bar tab is currently selected and whether the bar is collapsed.', inputSchema: { type: 'object', properties: {} } }
 ];
 
 function resolveWorkspacePath(p: string | undefined): string {
@@ -82,8 +115,12 @@ function resolveWorkspacePath(p: string | undefined): string {
 // up from the renderer on change so MCP can answer instantly.
 let editorSnapshot: unknown = null;
 ipcMain.handle('mcp:editor-snapshot', (_e, snap) => { editorSnapshot = snap; return true; });
-// Renderer-callable command channel (open file + cursor jump).
-type RendererCmd = { kind: 'open-file'; path: string; line?: number; col?: number };
+// Renderer-callable command channel (open file + cursor jump + right-tab + bottom-tab + REST).
+type RendererCmd =
+  | { kind: 'open-file'; path: string; line?: number; col?: number }
+  | { kind: 'set-right-tab'; tab: string }
+  | { kind: 'set-bottom-tab'; tab: string }
+  | { kind: 'open-rest-saved'; savedId: string; send?: boolean };
 const rendererListeners = new Set<(cmd: RendererCmd) => void>();
 ipcMain.handle('mcp:subscribe-commands', () => true);
 function dispatchToRenderer(cmd: RendererCmd) {
@@ -268,6 +305,85 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
         const r = await agentManager.runAndCollect(slug, { timeoutMs: Number(args?.timeoutMs) || undefined });
         const header = `agent=${slug} exit=${r.exitCode}${r.timedOut ? ' (TIMEOUT)' : ''}`;
         return ok(`${header}\n--- output ---\n${r.output || '(no output)'}`);
+      }
+
+      case 'ide_rest_send': {
+        if (!args?.method || !args?.url) throw new Error('method and url required');
+        const r = await restApi.send({
+          method: args.method,
+          url: args.url,
+          headers: args.headers ?? [],
+          params: args.params ?? [],
+          body: args.body ?? { kind: 'none' },
+          auth: args.auth ?? { kind: 'none' }
+        });
+        return ok(r);
+      }
+      case 'ide_rest_list_saved': {
+        const list = await restApi.readCollection();
+        return ok(list.map(r => ({ id: r.id, name: r.name, folder: r.folder, method: r.method, url: r.url })));
+      }
+      case 'ide_rest_get_saved': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        const list = await restApi.readCollection();
+        const r = list.find(x => x.id === id);
+        if (!r) return err(`No saved request with id ${id}`);
+        return ok(r);
+      }
+      case 'ide_rest_save': {
+        if (!args?.name || !args?.method || !args?.url) throw new Error('name, method, and url required');
+        const id = String(args.id || `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+        const record: RestSavedRequest = {
+          id,
+          name: String(args.name),
+          folder: args.folder ? String(args.folder) : undefined,
+          method: args.method,
+          url: String(args.url),
+          headers: args.headers ?? [],
+          params: args.params ?? [],
+          body: args.body ?? { kind: 'none' },
+          auth: args.auth ?? { kind: 'none' },
+          updatedAt: Date.now()
+        };
+        await restApi.saveRequest(record);
+        return ok({ id, saved: record });
+      }
+      case 'ide_rest_delete': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        await restApi.deleteRequest(id);
+        return ok(`deleted ${id}`);
+      }
+      case 'ide_rest_open_saved': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        dispatchToRenderer({ kind: 'open-rest-saved', savedId: id, send: !!args?.send });
+        return ok(`opening saved request ${id}${args?.send ? ' (and sending)' : ''}`);
+      }
+      case 'ide_set_right_tab': {
+        const tab = String(args?.tab ?? '');
+        if (!['ai', 'db', 'es', 'rest'].includes(tab)) {
+          throw new Error('tab must be one of: ai, db, es, rest');
+        }
+        dispatchToRenderer({ kind: 'set-right-tab', tab });
+        return ok(`right-tab set to ${tab}`);
+      }
+      case 'ide_get_right_tab': {
+        const snap = editorSnapshot as { rightTab?: string } | null;
+        return ok(snap?.rightTab ?? '(unknown — open the IDE)');
+      }
+      case 'ide_set_bottom_tab': {
+        const tab = String(args?.tab ?? '');
+        if (!['log', 'debug'].includes(tab)) {
+          throw new Error('tab must be one of: log, debug');
+        }
+        dispatchToRenderer({ kind: 'set-bottom-tab', tab });
+        return ok(`bottom-tab set to ${tab}`);
+      }
+      case 'ide_get_bottom_tab': {
+        const snap = editorSnapshot as { bottomTab?: string; bottomCollapsed?: boolean } | null;
+        return ok({ tab: snap?.bottomTab ?? '(unknown)', collapsed: snap?.bottomCollapsed ?? false });
       }
     }
     return err(`Unknown tool: ${name}`);

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatAttachment, ChatMessage, Conversation, DbColumn, DebugLang, DebugStatus, ServiceDef, ServiceRuntime, StackFrame } from '../../../shared/types';
+import type { ChatAttachment, ChatMessage, Conversation, DbColumn, DebugLang, DebugStatus, RestRequestSpec, RestResult, ServiceDef, ServiceRuntime, StackFrame } from '../../../shared/types';
 
 // Renderer-side memory caps. Kept in sync with src/main/limits.ts — the
 // main process is authoritative but we re-cap here so a runaway stream
@@ -32,10 +32,22 @@ export type CenterTab =
   | { kind: 'ai-task'; id: string; name: string }
   | { kind: 'ai'; id: string; name: string; conversationId?: string; initialPrompt?: string }
   | { kind: 'design-proposals'; id: string; name: string; proposals: DesignProposal[]; targetPath?: string }
-  | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string };
+  | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string }
+  | { kind: 'rest'; id: string; name: string; savedId?: string };
 
-export type BottomTabKey = 'terminal' | 'problems' | 'ports' | 'tasks' | 'browser' | 'search';
-export type RightTabKey = 'ai' | 'db' | 'es' | 'log' | 'debug';
+export type BottomTabKey = 'log' | 'debug';
+export type RightTabKey = 'ai' | 'db' | 'es' | 'rest';
+
+export function emptyRestSpec(): RestRequestSpec {
+  return {
+    method: 'GET',
+    url: '',
+    headers: [],
+    params: [],
+    body: { kind: 'none' },
+    auth: { kind: 'none' }
+  };
+}
 
 export type LogSeverity = 'debug' | 'info' | 'warn' | 'error';
 export type LogBubble = {
@@ -58,6 +70,7 @@ type Store = {
   openBrowserTab: (url: string, name?: string) => void;
   openSqlTab: () => void;
   openEsTab: () => void;
+  openRestTab: (opts?: { spec?: RestRequestSpec; name?: string; savedId?: string }) => string;
   openDiffTab: (opts: { filePath: string; hash?: string; diff: string }) => void;
   openAiTaskTab: (opts?: { goal?: string; priorities?: string[] }) => void;
   openAiChatTab: (opts?: { conversationId?: string; name?: string; focusIfOpen?: boolean; initialPrompt?: string }) => string;
@@ -123,7 +136,7 @@ type Store = {
   toast?: string;
   showToast: (msg: string, ms?: number) => void;
 
-  layout: { leftW: number; rightW: number; bottomH: number; servicesH: number; sqlSplit: number; agentsH: number };
+  layout: { leftW: number; rightW: number; bottomH: number; servicesH: number; sqlSplit: number; agentsH: number; restSplit: number };
   setLayout: (patch: Partial<Store['layout']>) => void;
 
   pendingServiceDraft?: { name: string; command: string; cwd: string };
@@ -153,6 +166,18 @@ type Store = {
   esRunRequest: number;
   triggerEsRun: () => void;
 
+  // REST workspace. One shared spec/result powers the (singleton) center tab.
+  // Saved-id is non-null when the user is editing an entry from the panel
+  // collection, so "Save" updates the existing record instead of cloning.
+  restSpec: RestRequestSpec;
+  setRestSpec: (s: RestRequestSpec | ((prev: RestRequestSpec) => RestRequestSpec)) => void;
+  restResult?: RestResult;
+  setRestResult: (r: RestResult | undefined) => void;
+  restSavedId?: string;
+  setRestSavedId: (id?: string) => void;
+  restRunRequest: number;
+  triggerRestRun: () => void;
+
   // Debugger — breakpoints are kept per file (1-indexed lines) so they
   // survive tab switches and editor remount; the rest is per-active-session.
   breakpoints: Record<string, number[]>;
@@ -176,9 +201,9 @@ const LAYOUT_KEY = 'opendev:layout:v1';
 function readLayout(): Store['layout'] {
   try {
     const s = localStorage.getItem(LAYOUT_KEY);
-    if (s) return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, ...JSON.parse(s) };
+    if (s) return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, restSplit: 280, ...JSON.parse(s) };
   } catch {}
-  return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220 };
+  return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, restSplit: 280 };
 }
 function writeLayout(l: Store['layout']) {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)); } catch {}
@@ -224,6 +249,10 @@ export const useStore = create<Store>((set, get) => ({
       sqlText: 'SELECT 1;',
       esResult: undefined,
       esText: 'GET /_search\n{\n  "query": { "match_all": {} },\n  "size": 10\n}',
+      // REST workspace
+      restSpec: emptyRestSpec(),
+      restResult: undefined,
+      restSavedId: undefined,
       // Editor/jump state
       references: undefined,
       pendingJump: undefined
@@ -273,6 +302,29 @@ export const useStore = create<Store>((set, get) => ({
     const tab: CenterTab = { kind: 'es', id, name: 'ES' };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
   }),
+  openRestTab: (opts) => {
+    // Singleton — one REST workspace tab; selecting a saved request from
+    // the right panel reuses it with the new spec loaded.
+    const state = get();
+    const existing = state.centerTabs.find(t => t.kind === 'rest');
+    const tabName = opts?.name || 'REST';
+    if (opts?.spec) {
+      set({ restSpec: opts.spec, restResult: undefined, restSavedId: opts.savedId });
+    } else if (!existing) {
+      set({ restSpec: emptyRestSpec(), restResult: undefined, restSavedId: undefined });
+    }
+    if (existing) {
+      set((s) => ({
+        activeCenterId: existing.id,
+        centerTabs: s.centerTabs.map(t => t.id === existing.id ? { ...t, name: tabName, savedId: opts?.savedId } as CenterTab : t)
+      }));
+      return existing.id;
+    }
+    const id = nextTabId();
+    const tab: CenterTab = { kind: 'rest', id, name: tabName, savedId: opts?.savedId };
+    set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
+    return id;
+  },
   openDiffTab: (opts) => set((s) => {
     const id = nextTabId();
     const file = opts.filePath.split('/').pop() || 'diff';
@@ -373,14 +425,16 @@ export const useStore = create<Store>((set, get) => ({
       : t)
   })),
 
-  bottomTab: 'ports',
+  bottomTab: 'log',
   setBottomTab: (t) => set({ bottomTab: t }),
   rightTab: 'ai',
   setRightTab: (t) => set({ rightTab: t }),
 
   rightCollapsed: false,
   toggleRight: () => set((s) => ({ rightCollapsed: !s.rightCollapsed })),
-  bottomCollapsed: false,
+  // Collapsed by default — LOG/DEBUG are diagnostic surfaces that should
+  // stay out of the way until the user (or a debug session) opens them.
+  bottomCollapsed: true,
   toggleBottom: () => set((s) => ({ bottomCollapsed: !s.bottomCollapsed })),
 
   modal: null,
@@ -501,6 +555,15 @@ export const useStore = create<Store>((set, get) => ({
   setEsResult: (r) => set({ esResult: r }),
   esRunRequest: 0,
   triggerEsRun: () => set((s) => ({ esRunRequest: s.esRunRequest + 1 })),
+
+  restSpec: emptyRestSpec(),
+  setRestSpec: (s) => set((prev) => ({ restSpec: typeof s === 'function' ? s(prev.restSpec) : s })),
+  restResult: undefined,
+  setRestResult: (r) => set({ restResult: r }),
+  restSavedId: undefined,
+  setRestSavedId: (id) => set({ restSavedId: id }),
+  restRunRequest: 0,
+  triggerRestRun: () => set((s) => ({ restRunRequest: s.restRunRequest + 1 })),
 
   breakpoints: {},
   toggleBreakpoint: (path, line) => set((s) => {

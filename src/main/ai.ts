@@ -731,6 +731,77 @@ async function streamViaCodexCli(streamId: string, text: string, conv: Conversat
   await saveConversation(conv);
 }
 
+// OpenCode CLI — local-first coding agent that talks to any OpenAI-compatible
+// backend (default Ollama). It's a one-shot RAG-style command, not a streaming
+// chat: we invoke `opencode ask <question>` with the user's configured base
+// URL + model, capture stdout, and emit the whole thing in a single chunk.
+async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conversation): Promise<void> {
+  const settings = await loadSettings();
+  if (!settings.aiLocalEnabled) {
+    const msg = '\n[opencode] Local AI is not enabled — turn it on in Settings → Local AI.\n';
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    return;
+  }
+  const configured = (settings.aiLocalBinPath || 'opencode').trim() || 'opencode';
+  const bin = resolveBinPath(configured) || configured;
+  const cwd = workspace.getRoot() || process.env.HOME || '/';
+  const args = ['ask', '--repo', cwd];
+  if (settings.aiLocalBaseUrl?.trim()) { args.push('--base-url', settings.aiLocalBaseUrl.trim()); }
+  if (settings.aiLocalModel?.trim()) { args.push('--model', settings.aiLocalModel.trim()); }
+  if (settings.aiLocalApiKey?.trim()) { args.push('--api-key', settings.aiLocalApiKey.trim()); }
+  // Positional question. OpenCode reads only argv — stdin is not consulted.
+  args.push(text);
+
+  console.log(`[opencode] spawn ${bin} ${args.slice(0, -1).join(' ')} <question> in ${cwd} (q=${text.length} chars)`);
+  const proc = spawn(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  activeStreams.set(streamId, proc);
+  const acc = makeResponseAcc();
+  let stderrBuf = '';
+
+  proc.on('error', (err) => {
+    const where = `Binary tried: ${bin}\nPATH walked: ${process.env.PATH}\n`;
+    const msg = `\n[opencode failed to spawn] ${err.message}\n${where}` +
+      `Set Settings → Local AI → OpenCode binary to the full path of your built binary, e.g. ~/Desktop/repo/OpenCode/target/release/opencode.\n`;
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+    console.error('[opencode] spawn error', err.message);
+  });
+
+  proc.stdout?.on('data', (b: Buffer) => {
+    const t = b.toString('utf8');
+    acc.append(t);
+    if (acc.truncated()) { try { proc.kill('SIGTERM'); } catch {} return; }
+    // OpenCode is non-streaming but it does emit the full response in one
+    // (or a handful of) write(s). Forward each chunk live so the UI doesn't
+    // sit on "thinking…" while the buffer fills.
+    safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
+  });
+
+  proc.stderr?.on('data', (b: Buffer) => {
+    const t = b.toString('utf8');
+    stderrBuf = tail(stderrBuf + t, LIMITS.aiStderrTailBytes);
+    console.error('[opencode stderr]', t.trimEnd());
+  });
+
+  await new Promise<void>((resolve) => {
+    proc.on('close', (code) => {
+      console.log(`[opencode] exit code=${code} acc=${acc.value().length} stderr=${stderrBuf.length}`);
+      if (acc.value().length === 0 && code !== 0) {
+        const msg = `\n[opencode exited ${code} with no output]\n` +
+          (stderrBuf ? `stderr:\n${stderrBuf}\n` : '') +
+          `Likely causes: backend not reachable at ${settings.aiLocalBaseUrl || 'http://localhost:11434/v1'}, or model "${settings.aiLocalModel || '(unset)'}" not pulled. Try in Terminal: \`${bin} ask "hello"\`.\n`;
+        safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+        acc.append(msg);
+      }
+      resolve();
+    });
+  });
+  safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
+  activeStreams.delete(streamId);
+  conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'opencode' });
+  trimConversation(conv);
+  await saveConversation(conv);
+}
+
 export function registerAiIpc() {
   ipcMain.handle(IPC.AiConversations, () => listConversations());
   ipcMain.handle(IPC.AiConversationGet, (_e, id: string) => loadConversation(id));
@@ -744,14 +815,19 @@ export function registerAiIpc() {
     conversationId?: string;
     text: string;
     attachments?: ChatAttachment[];
-    transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'sdk' | 'cli';
+    transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli';
     context?: IdeContext;
   }) => {
-    let conv: Conversation;
+    let conv: Conversation | null = null;
     if (args.conversationId) {
-      conv = (await loadConversation(args.conversationId))!;
-      if (!conv) throw new Error('Conversation not found');
-    } else {
+      // Best effort. If the file is gone (deleted from another window,
+      // workspace switch race, on-disk cleanup, …) fall through to a fresh
+      // conversation rather than failing the send — the renderer picks up
+      // the new id from the return value.
+      conv = await loadConversation(args.conversationId);
+      if (!conv) console.warn(`[ai:send] stale conversationId ${args.conversationId} — starting new conversation`);
+    }
+    if (!conv) {
       conv = {
         id: randomUUID(),
         title: args.text.slice(0, 60) || 'New conversation',
@@ -772,7 +848,7 @@ export function registerAiIpc() {
     const streamId = randomUUID();
     // Map legacy values "sdk"/"cli" to the claude defaults.
     const raw = args.transport || 'claude-cli';
-    const transport: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' =
+    const transport: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' =
       raw === 'sdk' ? 'claude-sdk' : raw === 'cli' ? 'claude-cli' : raw;
     // First turn = include the IDE convention instructions (design-proposals
     // format, follow-up Q&A behavior). Resumed turns don't need them
@@ -783,6 +859,7 @@ export function registerAiIpc() {
       if (transport === 'claude-cli') return () => streamViaClaudeCli(streamId, prompt, conv);
       if (transport === 'openai-sdk') return () => streamViaOpenAiSdk(streamId, prompt, conv, args.attachments);
       if (transport === 'codex-cli') return () => streamViaCodexCli(streamId, prompt, conv);
+      if (transport === 'opencode-cli') return () => streamViaOpenCodeCli(streamId, args.text, conv);
       return () => streamViaClaudeSdk(streamId, prompt, conv, args.attachments);
     })();
     run().catch((err) => {

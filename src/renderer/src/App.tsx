@@ -14,17 +14,18 @@ import { InstallNodePrompt } from './components/InstallNodePrompt';
 import { ServicesPanel } from './panels/ServicesPanel';
 import { AIChat } from './panels/AIChat';
 import { ConversationsList } from './panels/ConversationsList';
-import { LogPanel } from './panels/LogPanel';
 import { BrowserPanel } from './panels/BrowserPanel';
 import { DiffWorkspace } from './panels/DiffWorkspace';
 import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
 import { AgentsPanel } from './panels/AgentsPanel';
 import { AgentRunWorkspace } from './panels/AgentRunWorkspace';
-import { DebugPanel } from './panels/DebugPanel';
 import { DbConnectionsPanel } from './panels/DbConnectionsPanel';
 import { SqlWorkspace } from './panels/SqlWorkspace';
 import { EsWorkspace } from './panels/EsWorkspace';
+import { RestWorkspace } from './panels/RestWorkspace';
+import { RestRequestsPanel } from './panels/RestRequestsPanel';
+import { BottomBar } from './components/BottomBar';
 
 export default function App() {
   const [root, setRoot] = useState<string | undefined>();
@@ -50,6 +51,8 @@ export default function App() {
   const toast = useStore(s => s.toast);
   const layout = useStore(s => s.layout);
   const setLayout = useStore(s => s.setLayout);
+  const bottomCollapsed = useStore(s => s.bottomCollapsed);
+  const bottomTab = useStore(s => s.bottomTab);
   const [showSettings, setShowSettings] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<{ hasBrew: boolean } | null>(null);
   const tabDragRef = useRef<
@@ -138,10 +141,11 @@ export default function App() {
         }
       }
       // Validate the restored tab against the current set; fall back to
-      // 'ai' if the saved value is from a previous layout.
-      const validTabs = ['ai', 'db', 'es', 'log'] as const;
+      // 'ai' if the saved value is from a previous layout. (LOG/DEBUG used
+      // to live here too — those sessions now restore as 'ai'.)
+      const validTabs = ['ai', 'db', 'es', 'rest'] as const;
       const restoredTab = validTabs.includes(s.rightTab as any) ? s.rightTab : 'ai';
-      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'log');
+      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest');
       if (s.sqlConnId) useStore.getState().setSqlConnId(s.sqlConnId);
       if (s.sqlText) useStore.getState().setSqlText(s.sqlText);
       if (s.esText) useStore.getState().setEsText(s.esText);
@@ -211,8 +215,9 @@ export default function App() {
           for (const [path, lines] of Object.entries(cur.breakpoints)) {
             window.opendev.debug.request('setBreakpoints', { path, lines }).catch(() => {});
           }
-          // Auto-switch the right panel to DEBUG so the user sees it immediately.
-          cur.setRightTab('debug');
+          // Auto-open the bottom DEBUG panel so the user sees it immediately.
+          cur.setBottomTab('debug');
+          if (cur.bottomCollapsed) cur.toggleBottom();
           break;
         case 'paused':
           cur.setDebugPaused({ reason: e.reason, frames: e.frames });
@@ -280,18 +285,41 @@ export default function App() {
         path: t.kind === 'file' ? t.path : undefined,
         modified: t.kind === 'file' ? t.modified : undefined
       })),
-      activeFileContent: active && active.kind === 'file' ? (active.dirtyContent ?? active.content) : undefined
+      activeFileContent: active && active.kind === 'file' ? (active.dirtyContent ?? active.content) : undefined,
+      rightTab,
+      bottomTab,
+      bottomCollapsed
     };
     try { window.opendev.mcp.pushEditorSnapshot(snap); } catch {}
-  }, [tabs, activeId, root]);
+  }, [tabs, activeId, root, rightTab, bottomTab, bottomCollapsed]);
 
   // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
   useEffect(() => {
-    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number }) => {
+    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number; tab?: 'ai' | 'db' | 'es' | 'rest' | 'log' | 'debug'; savedId?: string; send?: boolean }) => {
       if (cmd?.kind === 'open-file' && cmd.path) {
         openFileFromPath(cmd.path).then(() => {
           if (cmd.line != null) setPendingJump({ path: cmd.path!, line: cmd.line, col: cmd.col ?? 0 });
         });
+      } else if (cmd?.kind === 'set-right-tab' && cmd.tab) {
+        const t = cmd.tab as 'ai' | 'db' | 'es' | 'rest';
+        if (['ai', 'db', 'es', 'rest'].includes(t)) setRightTab(t);
+      } else if (cmd?.kind === 'set-bottom-tab' && cmd.tab) {
+        const t = cmd.tab as 'log' | 'debug';
+        if (['log', 'debug'].includes(t)) {
+          useStore.getState().setBottomTab(t);
+          if (useStore.getState().bottomCollapsed) useStore.getState().toggleBottom();
+        }
+      } else if (cmd?.kind === 'open-rest-saved' && cmd.savedId) {
+        window.opendev.rest.listSaved().then(list => {
+          const r = list.find(x => x.id === cmd.savedId);
+          if (!r) return;
+          useStore.getState().openRestTab({
+            spec: { method: r.method, url: r.url, headers: r.headers, params: r.params, body: r.body, auth: r.auth },
+            name: r.name || r.url || 'REST',
+            savedId: r.id
+          });
+          if (cmd.send) useStore.getState().triggerRestRun();
+        }).catch(() => {});
       }
     };
     const off = (window.opendev as any).mcp?.onCommand?.(handler);
@@ -387,6 +415,7 @@ export default function App() {
       </div>
 
       <div className="workspace">
+        <div className="workspace-row">
         {/* LEFT: Project tree on top, Services on bottom */}
         <div className="col-left" style={{ width: layout.leftW, flex: `0 0 ${layout.leftW}px`, display: 'flex', flexDirection: 'column' }}>
           <div className="panel left-files" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -415,7 +444,7 @@ export default function App() {
           <div className="center-editor">
             <div className="tabs">
               {tabs.map(t => {
-                const icon = t.kind === 'terminal' ? '⌨ ' : t.kind === 'browser' ? '🌐 ' : t.kind === 'sql' ? '⚡ ' : t.kind === 'es' ? '🔍 ' : t.kind === 'diff' ? '⇄ ' : t.kind === 'ai-task' ? '✦ ' : t.kind === 'ai' ? '🤖 ' : t.kind === 'design-proposals' ? '◫ ' : '';
+                const icon = t.kind === 'terminal' ? '⌨ ' : t.kind === 'browser' ? '🌐 ' : t.kind === 'sql' ? '⚡ ' : t.kind === 'es' ? '🔍 ' : t.kind === 'rest' ? '⇆ ' : t.kind === 'diff' ? '⇄ ' : t.kind === 'ai-task' ? '✦ ' : t.kind === 'ai' ? '🤖 ' : t.kind === 'design-proposals' ? '◫ ' : '';
                 const isRenaming = renamingTabId === t.id;
                 return (
                   <div
@@ -534,7 +563,7 @@ export default function App() {
               })}
               {tabs.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--fg-3)', fontSize: 11 }}>Cmd+P to find a file • Cmd+` for terminal</div>}
             </div>
-            <DebugToolbar active={active} setRightTab={setRightTab} />
+            <DebugToolbar active={active} />
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, background: 'var(--bg-0)' }}>
               {!active && (
                 <div className="empty-state">
@@ -564,6 +593,7 @@ export default function App() {
                   {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} />}
                   {t.kind === 'sql' && <SqlWorkspace />}
                   {t.kind === 'es' && <EsWorkspace />}
+                  {t.kind === 'rest' && <RestWorkspace tabId={t.id} />}
                   {t.kind === 'diff' && <DiffWorkspace filePath={t.filePath} hash={t.hash} diff={t.diff} />}
                   {t.kind === 'ai-task' && <AiTaskWorkspace />}
                   {t.kind === 'ai' && (
@@ -591,12 +621,11 @@ export default function App() {
               ['ai', 'AI'],
               ['db', 'DB'],
               ['es', 'ES'],
-              ['log', 'LOG'],
-              ['debug', 'DEBUG']
+              ['rest', 'REST']
             ].map(([k, label]) => (
               <div key={k}
                 className={`right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'log' | 'debug')}>{label}</div>
+                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest')}>{label}</div>
             ))}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -609,11 +638,8 @@ export default function App() {
             <div style={{ flex: 1, minHeight: 0, display: rightTab === 'es' ? 'flex' : 'none', flexDirection: 'column' }}>
               <DbConnectionsPanel drivers={['elasticsearch']} title="ES / OpenSearch" />
             </div>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'log' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <LogPanel />
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'debug' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <DebugPanel />
+            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'rest' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <RestRequestsPanel />
             </div>
           </div>
           {/* Bottom-of-right-column: AI Agents panel, vertically split off */}
@@ -624,6 +650,26 @@ export default function App() {
           </div>
         </div>
 
+        </div>{/* /.workspace-row */}
+
+        {!bottomCollapsed && (
+          <Resizer
+            orientation="horizontal"
+            value={layout.bottomH}
+            min={120}
+            max={800}
+            invert
+            onChange={(v) => setLayout({ bottomH: v })}
+          />
+        )}
+        <div
+          className="bottom-bar-wrap"
+          style={bottomCollapsed
+            ? { flex: '0 0 auto', minHeight: 0 }
+            : { height: layout.bottomH, flex: `0 0 ${layout.bottomH}px`, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+        >
+          <BottomBar />
+        </div>
       </div>
 
       {modal === 'fuzzy' && <FuzzyFinder />}
@@ -706,10 +752,17 @@ export default function App() {
 
 // Slim toolbar above the editor: a "Debug" button when the active tab is a
 // debuggable JS file, and the step controls whenever a session is live.
-function DebugToolbar({ active, setRightTab }: { active: ReturnType<typeof useStore.getState>['centerTabs'][number] | undefined; setRightTab: (k: 'ai' | 'db' | 'es' | 'log' | 'debug') => void }) {
+function DebugToolbar({ active }: { active: ReturnType<typeof useStore.getState>['centerTabs'][number] | undefined }) {
   const session = useStore((s) => s.debugSession);
   const paused = useStore((s) => s.debugPaused);
   const showToast = useStore((s) => s.showToast);
+  const setBottomTab = useStore((s) => s.setBottomTab);
+  const bottomCollapsed = useStore((s) => s.bottomCollapsed);
+  const toggleBottom = useStore((s) => s.toggleBottom);
+  const openDebug = () => {
+    setBottomTab('debug');
+    if (bottomCollapsed) toggleBottom();
+  };
   const isJsFile = active?.kind === 'file' && /\.(m?js|cjs)$/i.test(active.path);
   if (!session && !isJsFile) return null;
   const startNode = async () => {
@@ -739,7 +792,7 @@ function DebugToolbar({ active, setRightTab }: { active: ReturnType<typeof useSt
           <button className="dbg-btn" title="Step Out" onClick={cmd('stepOut')} disabled={!paused}>⤴</button>
           <button className="dbg-btn stop" title="Stop" onClick={() => window.opendev.debug.stop()}>⏹</button>
           <span style={{ flex: 1 }} />
-          <button className="dbg-btn link" onClick={() => setRightTab('debug')}>open DEBUG panel →</button>
+          <button className="dbg-btn link" onClick={openDebug}>open DEBUG panel →</button>
         </>
       )}
     </div>

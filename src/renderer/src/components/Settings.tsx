@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppSettings } from '../../../shared/types';
 import { THEMES, applyTheme, themeById, type Theme } from '../themes';
+import { ModelCapabilityNote } from './ModelCapabilityNote';
 
 type Props = { onClose: () => void };
 
@@ -55,6 +56,16 @@ export function Settings({ onClose }: Props) {
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
   const [themeId, setThemeId] = useState('vscode-dark');
 
+  // Local AI (OpenCode) — toggle, binary, backend.
+  const [aiLocalEnabled, setAiLocalEnabled] = useState(false);
+  const [aiLocalBin, setAiLocalBin] = useState('');
+  const [aiLocalBaseUrl, setAiLocalBaseUrl] = useState('http://localhost:11434/v1');
+  const [aiLocalModel, setAiLocalModel] = useState('');
+  const [aiLocalApiKey, setAiLocalApiKey] = useState('');
+  const [aiLocalModels, setAiLocalModels] = useState<Array<{ id: string; size?: number }>>([]);
+  const [aiLocalModelsLoading, setAiLocalModelsLoading] = useState(false);
+  const [aiLocalModelsErr, setAiLocalModelsErr] = useState<string | undefined>();
+
   useEffect(() => {
     window.opendev.settings.get().then((s: AppSettings) => {
       if (s.displayFontSize) setDisplayFont(s.displayFontSize);
@@ -70,8 +81,46 @@ export function Settings({ onClose }: Props) {
       if (s.anthropicModel) setAnthropicModel(s.anthropicModel);
       if (s.openaiModel) setOpenaiModel(s.openaiModel);
       if (s.themeId) setThemeId(s.themeId);
+      if (s.aiLocalEnabled) setAiLocalEnabled(true);
+      if (s.aiLocalBinPath) setAiLocalBin(s.aiLocalBinPath);
+      if (s.aiLocalBaseUrl) setAiLocalBaseUrl(s.aiLocalBaseUrl);
+      if (s.aiLocalModel) setAiLocalModel(s.aiLocalModel);
+      if (s.aiLocalApiKey) setAiLocalApiKey(s.aiLocalApiKey);
     });
   }, []);
+
+  const refreshLocalModels = async () => {
+    setAiLocalModelsLoading(true);
+    setAiLocalModelsErr(undefined);
+    try {
+      const r = await window.opendev.aiLocal.listModels();
+      if (r.ok) {
+        setAiLocalModels(r.models);
+        // If the user has nothing picked but we found models, default to the
+        // first — saves a step on first open.
+        if (!aiLocalModel && r.models.length > 0) {
+          setAiLocalModel(r.models[0].id);
+          persist({ aiLocalModel: r.models[0].id });
+        }
+      } else {
+        setAiLocalModels([]);
+        setAiLocalModelsErr(r.error);
+      }
+    } catch (e: any) {
+      setAiLocalModels([]);
+      setAiLocalModelsErr(e?.message || String(e));
+    } finally {
+      setAiLocalModelsLoading(false);
+    }
+  };
+
+  // Auto-refresh the model list whenever Local AI is enabled OR the base URL
+  // changes. Keeps the dropdown honest with what's actually installed.
+  useEffect(() => {
+    if (!aiLocalEnabled) return;
+    refreshLocalModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiLocalEnabled, aiLocalBaseUrl]);
 
   const onTheme = (t: Theme) => {
     setThemeId(t.id);
@@ -85,6 +134,10 @@ export function Settings({ onClose }: Props) {
 
   const persist = (patch: Partial<AppSettings>) => {
     window.opendev.settings.set(patch);
+    // Notify anything in the renderer that cares about settings — e.g. the
+    // AI chat tab needs to re-read aiLocalEnabled / aiLocalModel so the
+    // transport dropdown updates the moment the user toggles it.
+    try { window.dispatchEvent(new CustomEvent('opendev:settings-changed', { detail: patch })); } catch {}
   };
 
   const onDisplay = (n: number) => {
@@ -301,6 +354,86 @@ export function Settings({ onClose }: Props) {
                   onChange={(e) => { setCodexCli(e.target.value); persist({ codexCliPath: e.target.value }); }}
                   style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
               </div>
+            </div>
+          </div>
+
+          {/* Local AI — OpenCode against an OpenAI-compatible backend (Ollama by default). */}
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Local AI (OpenCode)</div>
+              <div className="settings-sub">
+                Use a local model via the OpenCode CLI. Talks to any OpenAI-compatible backend — defaults to Ollama at <code>http://localhost:11434/v1</code>.
+                When on, "OpenCode (local)" appears as a transport in the AI chat dropdown.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control">
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <input type="checkbox" checked={aiLocalEnabled}
+                    onChange={(e) => { setAiLocalEnabled(e.target.checked); persist({ aiLocalEnabled: e.target.checked }); }} />
+                  Enable local AI
+                </label>
+              </div>
+              {aiLocalEnabled && (
+                <>
+                  <div className="settings-control" style={{ marginTop: 6 }}>
+                    <input type="text" value={aiLocalBin}
+                      placeholder="opencode  (or absolute path, e.g. ~/Desktop/repo/OpenCode/target/release/opencode)"
+                      spellCheck={false}
+                      onChange={(e) => { setAiLocalBin(e.target.value); persist({ aiLocalBinPath: e.target.value }); }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                  </div>
+                  <div className="settings-control" style={{ marginTop: 6 }}>
+                    <input type="text" value={aiLocalBaseUrl}
+                      placeholder="http://localhost:11434/v1"
+                      spellCheck={false}
+                      onChange={(e) => { setAiLocalBaseUrl(e.target.value); persist({ aiLocalBaseUrl: e.target.value }); }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                  </div>
+                  <div className="settings-control" style={{ marginTop: 6, alignItems: 'center' }}>
+                    <select
+                      value={aiLocalModel}
+                      onChange={(e) => { setAiLocalModel(e.target.value); persist({ aiLocalModel: e.target.value }); }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    >
+                      {aiLocalModels.length === 0 && <option value="">{aiLocalModelsLoading ? 'Loading models…' : '(no models — type one below or refresh)'}</option>}
+                      {/* Show the saved value even if it isn't in the live list, so the dropdown
+                          doesn't silently clear the user's choice if the backend is briefly down. */}
+                      {aiLocalModel && !aiLocalModels.find(m => m.id === aiLocalModel) && (
+                        <option value={aiLocalModel}>{aiLocalModel} (not currently installed)</option>
+                      )}
+                      {aiLocalModels.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.id}{m.size ? ` — ${(m.size / 1024 / 1024 / 1024).toFixed(1)} GB` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button onClick={refreshLocalModels} disabled={aiLocalModelsLoading} style={{ fontSize: 11 }}>
+                      {aiLocalModelsLoading ? 'Loading…' : 'Refresh'}
+                    </button>
+                  </div>
+                  <div className="settings-control" style={{ marginTop: 6 }}>
+                    <input type="text" value={aiLocalModel}
+                      placeholder="model tag (e.g. llama3:8b, qwen2.5-coder:14b)"
+                      spellCheck={false}
+                      onChange={(e) => { setAiLocalModel(e.target.value); persist({ aiLocalModel: e.target.value }); }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                  </div>
+                  <div className="settings-control" style={{ marginTop: 6 }}>
+                    <input type="password" value={aiLocalApiKey}
+                      placeholder="API key (optional — Ollama doesn't need one)"
+                      spellCheck={false}
+                      onChange={(e) => { setAiLocalApiKey(e.target.value); persist({ aiLocalApiKey: e.target.value }); }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                  </div>
+                  {aiLocalModelsErr && (
+                    <div className="settings-sub" style={{ marginTop: 6, color: 'var(--danger)' }}>
+                      {aiLocalModelsErr}
+                    </div>
+                  )}
+                  <ModelCapabilityNote model={aiLocalModel} />
+                </>
+              )}
             </div>
           </div>
 

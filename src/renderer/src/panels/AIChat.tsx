@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, type DesignProposal } from '../state/store';
 import type { ChatAttachment, ChatMessage } from '../../../shared/types';
+import { ModelCapabilityNote } from '../components/ModelCapabilityNote';
 
 // Parses ```html-proposal:NAME blocks out of an assistant message. The
 // matching is line-anchored on the fence so we don't trip on stray ``` in
@@ -58,8 +59,36 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState('');
   const [text, setText] = useState('');
-  const [transport, setTransport] = useState<'claude-cli' | 'codex-cli'>('claude-cli');
-  const providerLabel = transport === 'codex-cli' ? 'Codex' : 'Claude';
+  const [transport, setTransport] = useState<'claude-cli' | 'codex-cli' | 'opencode-cli'>('claude-cli');
+  const providerLabel = transport === 'codex-cli' ? 'Codex' : transport === 'opencode-cli' ? 'OpenCode' : 'Claude';
+  // Local-AI gate — only show the OpenCode transport when the user has
+  // enabled it in Settings → Local AI. Polled on mount + whenever the
+  // settings storage event fires (saving in the Settings panel triggers
+  // an immediate re-read for any open chat tabs).
+  const [aiLocalEnabled, setAiLocalEnabled] = useState(false);
+  const [aiLocalModel, setAiLocalModel] = useState('');
+  useEffect(() => {
+    const load = () => window.opendev.settings.get().then(s => {
+      setAiLocalEnabled(!!s.aiLocalEnabled);
+      setAiLocalModel(s.aiLocalModel || '');
+    });
+    load();
+    // Settings.tsx dispatches this on every persist, so a toggle in the
+    // settings panel propagates to the dropdown immediately.
+    const onChange = () => load();
+    window.addEventListener('opendev:settings-changed', onChange);
+    // Also re-read when the window regains focus, for the cross-window case.
+    window.addEventListener('focus', onChange);
+    return () => {
+      window.removeEventListener('opendev:settings-changed', onChange);
+      window.removeEventListener('focus', onChange);
+    };
+  }, []);
+  // If the user disabled local AI while the chat had it selected, drop back
+  // to Claude so the next send doesn't fire into a disabled transport.
+  useEffect(() => {
+    if (!aiLocalEnabled && transport === 'opencode-cli') setTransport('claude-cli');
+  }, [aiLocalEnabled, transport]);
   const [sending, setSending] = useState(false);
   const streamIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -112,7 +141,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   // message we append on `done` is stamped with the provider that actually
   // produced it — not whatever the dropdown happens to be set to when the
   // response lands.
-  const inFlightProviderRef = useRef<'claude' | 'codex'>('claude');
+  const inFlightProviderRef = useRef<'claude' | 'codex' | 'opencode'>('claude');
 
   // Stream listener — only consumes events targeted at THIS tab's request.
   useEffect(() => {
@@ -210,10 +239,13 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
           active: t.id === activeId
         }))
       };
-      inFlightProviderRef.current = transport === 'codex-cli' ? 'codex' : 'claude';
+      inFlightProviderRef.current = transport === 'codex-cli' ? 'codex' : transport === 'opencode-cli' ? 'opencode' : 'claude';
       const r = await window.opendev.ai.send({ conversationId: convId, text: body, attachments, transport, context });
       streamIdRef.current = r.streamId;
-      if (!convId) {
+      // If main came back with a different id (it does when our convId was
+      // stale and main recovered into a fresh conversation), or we had no
+      // id at all, adopt the returned one and refresh the tab title.
+      if (!convId || r.conversationId !== convId) {
         setConvId(r.conversationId);
         // Pull the saved conversation so the title is real (server uses
         // the first 60 chars of the message as title).
@@ -331,6 +363,9 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
       </div>
 
       <div className="composer">
+        {transport === 'opencode-cli' && aiLocalModel && (
+          <ModelCapabilityNote model={aiLocalModel} variant="compact" />
+        )}
         {visibleAttachments.length > 0 && (
           <div className="composer-chips">
             {visibleAttachments.map((a, i) => {
@@ -405,6 +440,9 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
           >
             <option value="claude-cli">Claude Code</option>
             <option value="codex-cli">Codex</option>
+            {aiLocalEnabled && (
+              <option value="opencode-cli">{aiLocalModel ? `OpenCode · ${aiLocalModel}` : 'OpenCode (local)'}</option>
+            )}
           </select>
 
           <span className="composer-spacer" />
