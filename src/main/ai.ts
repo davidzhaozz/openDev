@@ -745,50 +745,140 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   const configured = (settings.aiLocalBinPath || 'opencode').trim() || 'opencode';
   const bin = resolveBinPath(configured) || configured;
   const cwd = workspace.getRoot() || process.env.HOME || '/';
+
+  // Pre-check the binary path. spawn()'s failure mode for a non-existent
+  // binary is an 'error' event AND a 'close' event with libuv's negative
+  // ENOENT code (-2), which produces two confusing log lines. Catching it
+  // here lets us emit one clean error and skip the broken spawn entirely.
+  if (configured.startsWith('/') && !existsSync(configured)) {
+    const msg = `\n[opencode] No file at "${configured}".\n` +
+      `Update Settings → Local AI → OpenCode binary. Either click Browse… to pick the actual binary, or paste the full path (e.g. ~/Desktop/repo/OpenCode/target/release/opencode).\n`;
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    return;
+  }
+  if (!configured.startsWith('/') && !resolveBinPath(configured)) {
+    const msg = `\n[opencode] Binary "${configured}" not found on PATH.\n` +
+      `PATH searched: ${process.env.PATH}\n` +
+      `Either put opencode on your PATH or set an absolute path in Settings → Local AI → OpenCode binary (Browse…).\n`;
+    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    return;
+  }
+
   const args = ['ask', '--repo', cwd];
-  if (settings.aiLocalBaseUrl?.trim()) { args.push('--base-url', settings.aiLocalBaseUrl.trim()); }
+  if (settings.aiLocalBaseUrl?.trim()) {
+    // OpenCode speaks the OpenAI chat protocol — it appends /chat/completions
+    // to whatever base-url we pass. Ollama serves the OpenAI surface at
+    // /v1/* (not at root), so a bare http://host:port returns 404 page not
+    // found. Append /v1 if the user left it off. This matches the same
+    // tolerance our discovery probe applies.
+    let url = settings.aiLocalBaseUrl.trim().replace(/\/+$/, '');
+    if (!/\/v\d+$/.test(url)) url += '/v1';
+    args.push('--base-url', url);
+  }
   if (settings.aiLocalModel?.trim()) { args.push('--model', settings.aiLocalModel.trim()); }
   if (settings.aiLocalApiKey?.trim()) { args.push('--api-key', settings.aiLocalApiKey.trim()); }
   // Positional question. OpenCode reads only argv — stdin is not consulted.
   args.push(text);
 
-  console.log(`[opencode] spawn ${bin} ${args.slice(0, -1).join(' ')} <question> in ${cwd} (q=${text.length} chars)`);
+  // Echo the invocation into the chat as a status line so the user can SEE
+  // the IDE is actually doing something. Previous builds went totally silent
+  // during the multi-second indexing pass, which read as "broken".
+  const displayArgs = args.slice(0, -1).join(' ');
+  const startBanner = `\n_Running: ${bin} ${displayArgs} "<your question>"_\n_cwd: ${cwd}_\n`;
+  safeSend(IPC.AiStream, { streamId, chunk: startBanner, done: false });
+
+  console.log(`[opencode] spawn ${bin} ${displayArgs} <question> in ${cwd} (q=${text.length} chars)`);
   const proc = spawn(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   activeStreams.set(streamId, proc);
+  const startedAt = Date.now();
   const acc = makeResponseAcc();
   let stderrBuf = '';
+  let spawnErrored = false;
+  let gotStdout = false;
+
+  // Heartbeat so a stalled invocation doesn't look like a hang. Fires every
+  // 15s as long as we haven't seen any stdout yet — gives the user a clock
+  // they can use to decide whether to cancel.
+  const heartbeat = setInterval(() => {
+    if (gotStdout) return;
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    safeSend(IPC.AiStream, { streamId, chunk: `\n_…still waiting on first stdout from opencode (${secs}s elapsed)_\n`, done: false });
+  }, 15_000);
 
   proc.on('error', (err) => {
-    const where = `Binary tried: ${bin}\nPATH walked: ${process.env.PATH}\n`;
-    const msg = `\n[opencode failed to spawn] ${err.message}\n${where}` +
-      `Set Settings → Local AI → OpenCode binary to the full path of your built binary, e.g. ~/Desktop/repo/OpenCode/target/release/opencode.\n`;
+    spawnErrored = true;
+    const code = (err as NodeJS.ErrnoException).code || '';
+    const hint = code === 'ENOENT'
+      ? `Binary not found at "${bin}". Update the path in Settings → Local AI → OpenCode binary.`
+      : code === 'EACCES'
+        ? `Permission denied executing "${bin}". Run \`chmod +x "${bin}"\` and try again.`
+        : `Update Settings → Local AI → OpenCode binary if the path is wrong.`;
+    const msg = `\n[opencode failed to spawn] ${err.message}\n${hint}\n`;
     safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+    acc.append(msg);
     console.error('[opencode] spawn error', err.message);
   });
 
   proc.stdout?.on('data', (b: Buffer) => {
     const t = b.toString('utf8');
+    if (!gotStdout) {
+      gotStdout = true;
+      const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+      safeSend(IPC.AiStream, { streamId, chunk: `\n_first stdout chunk after ${secs}s_\n\n`, done: false });
+    }
     acc.append(t);
     if (acc.truncated()) { try { proc.kill('SIGTERM'); } catch {} return; }
-    // OpenCode is non-streaming but it does emit the full response in one
-    // (or a handful of) write(s). Forward each chunk live so the UI doesn't
-    // sit on "thinking…" while the buffer fills.
     safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
   });
 
+  // OpenCode emits progress to stderr — "indexing /path...", "indexed N
+  // chunks; retrieving top K", and the retrieval context block. Forward
+  // every line so the user can see exactly what's happening during the
+  // multi-second indexing pass. They're rendered in italics and not
+  // persisted into the saved assistant message (we use `acc` for that).
+  let stderrLineBuf = '';
   proc.stderr?.on('data', (b: Buffer) => {
     const t = b.toString('utf8');
     stderrBuf = tail(stderrBuf + t, LIMITS.aiStderrTailBytes);
     console.error('[opencode stderr]', t.trimEnd());
+    stderrLineBuf += t;
+    let nl: number;
+    while ((nl = stderrLineBuf.indexOf('\n')) >= 0) {
+      const line = stderrLineBuf.slice(0, nl).trim();
+      stderrLineBuf = stderrLineBuf.slice(nl + 1);
+      if (!line) continue;
+      safeSend(IPC.AiStream, { streamId, chunk: `\n_${line}_\n`, done: false });
+    }
   });
 
   await new Promise<void>((resolve) => {
-    proc.on('close', (code) => {
-      console.log(`[opencode] exit code=${code} acc=${acc.value().length} stderr=${stderrBuf.length}`);
-      if (acc.value().length === 0 && code !== 0) {
-        const msg = `\n[opencode exited ${code} with no output]\n` +
+    proc.on('close', (code, signal) => {
+      clearInterval(heartbeat);
+      console.log(`[opencode] exit code=${code} signal=${signal} acc=${acc.value().length} stderr=${stderrBuf.length}`);
+      // If the 'error' event already explained what went wrong, don't pile
+      // a second, less-informative message on top.
+      if (spawnErrored) { resolve(); return; }
+      if (acc.value().length === 0 && (code !== 0 || signal)) {
+        // libuv reports spawn-time failures as negative `code` values
+        // (e.g. -2 ENOENT, -13 EACCES). Those should have been caught by
+        // the 'error' handler above; if we still land here with a negative
+        // code, surface the libuv interpretation explicitly.
+        let exitWord: string;
+        if (signal) {
+          exitWord = `terminated by ${signal}`;
+        } else if (typeof code === 'number' && code < 0) {
+          const libuv: Record<number, string> = { [-2]: 'ENOENT — binary not found', [-13]: 'EACCES — permission denied', [-8]: 'ENOEXEC — not a valid executable' };
+          exitWord = `failed to spawn (${libuv[code] || `libuv code ${code}`})`;
+        } else {
+          exitWord = `exited ${code}`;
+        }
+        const msg = `\n[opencode ${exitWord} with no output]\n` +
           (stderrBuf ? `stderr:\n${stderrBuf}\n` : '') +
-          `Likely causes: backend not reachable at ${settings.aiLocalBaseUrl || 'http://localhost:11434/v1'}, or model "${settings.aiLocalModel || '(unset)'}" not pulled. Try in Terminal: \`${bin} ask "hello"\`.\n`;
+          `Common causes:\n` +
+          `  • Backend not reachable at ${settings.aiLocalBaseUrl || 'http://localhost:11434/v1'} from this machine\n` +
+          `  • Model "${settings.aiLocalModel || '(unset)'}" not pulled on the host (run \`ollama pull ${settings.aiLocalModel || '<model>'}\` there)\n` +
+          `  • Wrong binary path in Settings → Local AI\n` +
+          `Try in Terminal: \`${bin} ask --base-url ${settings.aiLocalBaseUrl || 'http://localhost:11434/v1'} --model ${settings.aiLocalModel || '<model>'} "hello"\` to see the real error.\n`;
         safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
         acc.append(msg);
       }

@@ -112,10 +112,14 @@ const api = {
     deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id)
   },
   aiLocal: {
-    listModels: (): Promise<
+    // Pass `baseUrl` to probe a candidate that isn't saved yet (e.g. while
+    // the user is still typing in Settings). Omit it to probe whatever the
+    // current persisted setting points at.
+    listModels: (baseUrl?: string): Promise<
       | { ok: true; models: Array<{ id: string; size?: number; modifiedAt?: string }>; source: 'openai' | 'ollama'; baseUrl: string }
       | { ok: false; error: string; baseUrl: string }
-    > => ipcRenderer.invoke(IPC.AiLocalListModels)
+    > => ipcRenderer.invoke(IPC.AiLocalListModels, baseUrl),
+    pickBinary: (): Promise<string | null> => ipcRenderer.invoke(IPC.AiLocalPickBinary)
   },
   mcp: {
     status: (): Promise<{ running: boolean; url?: string; port?: number; error?: string }> => ipcRenderer.invoke(IPC.McpStatus),

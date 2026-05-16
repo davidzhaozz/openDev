@@ -38,6 +38,7 @@ export const IPC = {
   AiConversationDelete: 'ai:conversation-delete',
   AiCancel: 'ai:cancel',
   AiLocalListModels: 'ai-local:list-models',
+  AiLocalPickBinary: 'ai-local:pick-binary',
 
   // mcp
   McpStatus: 'mcp:status',

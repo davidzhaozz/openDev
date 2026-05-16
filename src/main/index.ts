@@ -142,16 +142,40 @@ function sendMenu(action: string) {
 
 function buildAppMenu() {
   const isMac = process.platform === 'darwin';
+  // Custom app menu (macOS only) so we can hook a "Preferences…" item where
+  // macOS users expect it — directly under "About", with the conventional
+  // ⌘, accelerator. Electron's built-in `role: 'appMenu'` omits Preferences.
+  const appMenu: Electron.MenuItemConstructorOptions = {
+    label: app.getName(),
+    submenu: [
+      { role: 'about' },
+      { type: 'separator' },
+      { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') },
+      { type: 'separator' },
+      { role: 'services' },
+      { type: 'separator' },
+      { role: 'hide' },
+      { role: 'hideOthers' },
+      { role: 'unhide' },
+      { type: 'separator' },
+      { role: 'quit' }
+    ]
+  };
   const template: Electron.MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    ...(isMac ? [appMenu] : []),
     {
       label: 'File',
       submenu: [
         { label: 'New Project…', accelerator: 'Shift+CmdOrCtrl+N', click: () => sendMenu('new-project') },
         { label: 'Open Project…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-project') },
         { label: 'Close Project', accelerator: 'Shift+CmdOrCtrl+W', click: () => sendMenu('close-project') },
-        { type: 'separator' },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') },
+        // On macOS, Preferences lives in the App menu (above). On other
+        // platforms there's no App menu, so surface it here as a fallback
+        // — the build is macOS-only today, but cheap insurance.
+        ...(!isMac ? [
+          { type: 'separator' as const },
+          { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') }
+        ] : []),
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }
       ]

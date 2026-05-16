@@ -17,6 +17,7 @@ export function ConversationsList() {
   const [history, setHistory] = useState<Conversation[]>([]);
   const tabs = useStore(s => s.centerTabs);
   const openAiChatTab = useStore(s => s.openAiChatTab);
+  const closeCenterTab = useStore(s => s.closeCenterTab);
   const showToast = useStore(s => s.showToast);
 
   const refresh = async () => {
@@ -43,8 +44,21 @@ export function ConversationsList() {
     openAiChatTab({});
   };
 
+  // Close every center tab whose AI conversation matches any of `ids`. Run
+  // before the disk delete so the renderer doesn't briefly point a tab at
+  // a missing file. Uses the live store state to avoid stale closure.
+  const closeMatchingTabs = (ids: Set<string>) => {
+    const cur = useStore.getState().centerTabs;
+    for (const t of cur) {
+      if (t.kind === 'ai' && t.conversationId && ids.has(t.conversationId)) {
+        closeCenterTab(t.id);
+      }
+    }
+  };
+
   const del = async (id: string) => {
     if (!confirm('Delete this conversation?')) return;
+    closeMatchingTabs(new Set([id]));
     await window.opendev.ai.deleteConversation(id);
     refresh();
   };
@@ -52,6 +66,7 @@ export function ConversationsList() {
   const delAll = async () => {
     if (!history.length) return;
     if (!confirm(`Delete all ${history.length} conversations? This cannot be undone.`)) return;
+    closeMatchingTabs(new Set(history.map(c => c.id)));
     for (const c of history) await window.opendev.ai.deleteConversation(c.id);
     refresh();
     showToast('All conversations deleted', 2000);
@@ -70,7 +85,14 @@ export function ConversationsList() {
         {history.map(c => {
           const open = openConvIds.has(c.id);
           return (
-            <div key={c.id} className={`cv-row ${open ? 'open' : ''}`} onClick={() => openConv(c)}>
+            <div key={c.id} className={`cv-row ${open ? 'open' : ''}`} onClick={() => {
+              // Skip the open action if the user is selecting text in the row
+              // — otherwise mouse-up ends the selection AND fires this handler,
+              // which navigates away before they can copy.
+              const sel = window.getSelection();
+              if (sel && sel.toString().length > 0) return;
+              openConv(c);
+            }}>
               <div className="cv-text">
                 <div className="cv-title">
                   {open && <span className="cv-open-dot">●</span>}

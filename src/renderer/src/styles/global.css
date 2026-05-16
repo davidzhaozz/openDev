@@ -187,6 +187,85 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   font-size: 11px;
   line-height: 1.35;
 }
+
+/* Local-AI discovery status — prominent box so the user actually sees
+   whether the probe worked or not (the old gray sub-text was too easy
+   to skim past). */
+.local-ai-status {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.local-ai-status.loading {
+  background: rgba(255,255,255,0.04);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+}
+.local-ai-status.ok {
+  background: #1f3d36;
+  color: #9be9c7;
+  border: 1px solid #2a5a4d;
+  font-family: inherit;
+}
+.local-ai-status.err {
+  background: #3d1f1f;
+  color: #f48771;
+  border: 1px solid #5a2a2a;
+  margin: 8px 0 0 0;
+  max-height: 200px;
+  overflow: auto;
+}
+.local-ai-status.warn {
+  background: #3d3520;
+  color: #e8c897;
+  border: 1px solid #5a4d2a;
+  font-family: inherit;
+}
+.local-ai-status.warn code {
+  background: rgba(0,0,0,0.25);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+}
+
+/* Discovered-model chips — clickable, visible at a glance below the URL. */
+.local-ai-chips {
+  display: flex; flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.local-ai-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 4px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.local-ai-chip:hover { background: var(--bg-hover); border-color: var(--accent); }
+.local-ai-chip.active {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  color: white;
+}
+.local-ai-chip-name { font-weight: 500; }
+.local-ai-chip-size {
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.local-ai-chip.active .local-ai-chip-size { color: rgba(255,255,255,0.7); }
 .col-left { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-1); }
 .col-center { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; }
 .col-right { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-1); }
@@ -2065,6 +2144,27 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   font-size: 14px; font-weight: 600;
   flex: 0 0 auto;
 }
+.settings-tabs {
+  display: flex;
+  background: var(--bg-solid-2);
+  border-bottom: 1px solid var(--border-solid);
+  flex: 0 0 auto;
+}
+.settings-tab {
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 2px solid transparent;
+}
+.settings-tab:hover { color: var(--fg-0); }
+.settings-tab.active {
+  color: var(--fg-0);
+  border-bottom-color: var(--accent);
+  background: var(--bg-solid-1);
+}
 .settings-section {
   padding: 6px 18px 18px;
   flex: 1 1 auto;
@@ -2371,7 +2471,7 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   border-left-color: var(--accent, #1177bb);
   background: var(--bg-2);
 }
-.cv-text { flex: 1; min-width: 0; }
+.cv-text { flex: 1; min-width: 0; user-select: text; -webkit-user-select: text; cursor: text; }
 .cv-title {
   font-weight: 500;
   color: var(--fg-0);

@@ -40,7 +40,7 @@ export function ModelCapabilityNote({ model, variant = 'block' }: { model: strin
       <ul>
         <li><b>Single-file edits and grep-based investigation:</b> usually fine.</li>
         <li><b>Multi-step debug loops or 5+ coordinated edits:</b> will spiral. Switch to a 14B+ model — try <code>qwen2.5-coder:14b</code>.</li>
-        <li><b>Tool-argument hallucination</b> (wrong paths) happens occasionally — that's why every write is gated <code>y/N</code>.</li>
+        <li><b>Tool-argument hallucination</b> (wrong paths, made-up symbols) happens occasionally — review proposed changes before applying.</li>
       </ul>
     </div>
   );

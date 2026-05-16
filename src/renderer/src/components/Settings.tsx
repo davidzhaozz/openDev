@@ -41,7 +41,10 @@ const EDITOR_FONT_PRESETS: Array<{ name: string; value: string }> = [
   { name: 'Courier New',       value: `'Courier New', Courier, monospace` }
 ];
 
+type SettingsTab = 'appearance' | 'ai' | 'local-ai';
+
 export function Settings({ onClose }: Props) {
+  const [tab, setTab] = useState<SettingsTab>('appearance');
   const [displayFont, setDisplayFont] = useState(12);
   const [editorFont, setEditorFont] = useState(13);
   const [transparency, setTransparency] = useState(0); // 0..90 (percent)
@@ -89,15 +92,17 @@ export function Settings({ onClose }: Props) {
     });
   }, []);
 
-  const refreshLocalModels = async () => {
+  // `overrideUrl` lets callers probe a candidate URL that hasn't been saved
+  // yet (we pass the in-flight typed value during debounced auto-refresh).
+  const refreshLocalModels = async (overrideUrl?: string) => {
     setAiLocalModelsLoading(true);
     setAiLocalModelsErr(undefined);
     try {
-      const r = await window.opendev.aiLocal.listModels();
+      const r = await window.opendev.aiLocal.listModels(overrideUrl);
       if (r.ok) {
         setAiLocalModels(r.models);
-        // If the user has nothing picked but we found models, default to the
-        // first — saves a step on first open.
+        // If the user has nothing picked but we found models, default to
+        // the first — saves a step on first open.
         if (!aiLocalModel && r.models.length > 0) {
           setAiLocalModel(r.models[0].id);
           persist({ aiLocalModel: r.models[0].id });
@@ -114,11 +119,16 @@ export function Settings({ onClose }: Props) {
     }
   };
 
-  // Auto-refresh the model list whenever Local AI is enabled OR the base URL
-  // changes. Keeps the dropdown honest with what's actually installed.
+  // Auto-discover models against the URL the user is currently typing,
+  // debounced so we don't fire a request per keystroke. Probes the typed
+  // value directly (not the persisted setting) so the dropdown reflects
+  // the URL the field shows.
   useEffect(() => {
     if (!aiLocalEnabled) return;
-    refreshLocalModels();
+    const url = aiLocalBaseUrl.trim();
+    if (!url) return;
+    const handle = setTimeout(() => { refreshLocalModels(url); }, 500);
+    return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiLocalEnabled, aiLocalBaseUrl]);
 
@@ -266,7 +276,21 @@ export function Settings({ onClose }: Props) {
           <button onClick={onClose}>Done</button>
         </div>
 
+        <div className="settings-tabs">
+          {([
+            ['appearance', 'Appearance'],
+            ['ai', 'AI'],
+            ['local-ai', 'Local AI']
+          ] as Array<[SettingsTab, string]>).map(([k, label]) => (
+            <div key={k}
+              className={`settings-tab ${tab === k ? 'active' : ''}`}
+              onClick={() => setTab(k)}
+            >{label}</div>
+          ))}
+        </div>
+
         <div className="settings-section">
+          {tab === 'appearance' && <>
           <div className="settings-row">
             <div className="settings-row-text">
               <div className="settings-label">Theme</div>
@@ -332,9 +356,10 @@ export function Settings({ onClose }: Props) {
             onChange={onEditorFont}
             listId="editor-font-list"
           />
+          </>}
 
+          {tab === 'ai' && <>
           <McpStatusRow />
-
 
           <div className="settings-row">
             <div className="settings-row-text">
@@ -356,7 +381,9 @@ export function Settings({ onClose }: Props) {
               </div>
             </div>
           </div>
+          </>}
 
+          {tab === 'local-ai' && <>
           {/* Local AI — OpenCode against an OpenAI-compatible backend (Ollama by default). */}
           <div className="settings-row">
             <div className="settings-row-text">
@@ -376,48 +403,85 @@ export function Settings({ onClose }: Props) {
               </div>
               {aiLocalEnabled && (
                 <>
-                  <div className="settings-control" style={{ marginTop: 6 }}>
+                  <div className="settings-control" style={{ marginTop: 6, alignItems: 'center' }}>
                     <input type="text" value={aiLocalBin}
                       placeholder="opencode  (or absolute path, e.g. ~/Desktop/repo/OpenCode/target/release/opencode)"
                       spellCheck={false}
                       onChange={(e) => { setAiLocalBin(e.target.value); persist({ aiLocalBinPath: e.target.value }); }}
                       style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                    <button
+                      onClick={async () => {
+                        const p = await window.opendev.aiLocal.pickBinary();
+                        if (p) { setAiLocalBin(p); persist({ aiLocalBinPath: p }); }
+                      }}
+                      style={{ fontSize: 11 }}
+                      title="Browse for the opencode binary"
+                    >Browse…</button>
                   </div>
-                  <div className="settings-control" style={{ marginTop: 6 }}>
+                  <div className="settings-control" style={{ marginTop: 6, alignItems: 'center' }}>
                     <input type="text" value={aiLocalBaseUrl}
-                      placeholder="http://localhost:11434/v1"
+                      placeholder="http://localhost:11434/v1  or  http://192.168.1.50:11434"
                       spellCheck={false}
                       onChange={(e) => { setAiLocalBaseUrl(e.target.value); persist({ aiLocalBaseUrl: e.target.value }); }}
                       style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
-                  </div>
-                  <div className="settings-control" style={{ marginTop: 6, alignItems: 'center' }}>
-                    <select
-                      value={aiLocalModel}
-                      onChange={(e) => { setAiLocalModel(e.target.value); persist({ aiLocalModel: e.target.value }); }}
-                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    >
-                      {aiLocalModels.length === 0 && <option value="">{aiLocalModelsLoading ? 'Loading models…' : '(no models — type one below or refresh)'}</option>}
-                      {/* Show the saved value even if it isn't in the live list, so the dropdown
-                          doesn't silently clear the user's choice if the backend is briefly down. */}
-                      {aiLocalModel && !aiLocalModels.find(m => m.id === aiLocalModel) && (
-                        <option value={aiLocalModel}>{aiLocalModel} (not currently installed)</option>
-                      )}
-                      {aiLocalModels.map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.id}{m.size ? ` — ${(m.size / 1024 / 1024 / 1024).toFixed(1)} GB` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <button onClick={refreshLocalModels} disabled={aiLocalModelsLoading} style={{ fontSize: 11 }}>
-                      {aiLocalModelsLoading ? 'Loading…' : 'Refresh'}
+                    <button onClick={() => refreshLocalModels(aiLocalBaseUrl)} disabled={aiLocalModelsLoading} style={{ fontSize: 11 }}>
+                      {aiLocalModelsLoading ? 'Discovering…' : 'Discover'}
                     </button>
                   </div>
+
+                  {/* Status row — make discovery outcome obvious instead of
+                      burying it in muted footer text. */}
+                  {aiLocalModelsLoading && (
+                    <div className="local-ai-status loading">Discovering models at {aiLocalBaseUrl}…</div>
+                  )}
+                  {!aiLocalModelsLoading && !aiLocalModelsErr && aiLocalModels.length > 0 && (
+                    <div className="local-ai-status ok">
+                      ✓ Found {aiLocalModels.length} model{aiLocalModels.length === 1 ? '' : 's'} at {aiLocalBaseUrl}
+                    </div>
+                  )}
+                  {!aiLocalModelsLoading && !aiLocalModelsErr && aiLocalModels.length === 0 && aiLocalBaseUrl.trim() && (
+                    <div className="local-ai-status warn">
+                      Reached {aiLocalBaseUrl} but no models are installed. Pull one on the host machine, e.g.&nbsp;
+                      <code>ollama pull qwen2.5-coder:14b</code>, then click Discover.
+                    </div>
+                  )}
+                  {!aiLocalModelsLoading && aiLocalModelsErr && (
+                    <pre className="local-ai-status err">{aiLocalModelsErr}</pre>
+                  )}
+
+                  {/* Discovered models as visible chips — click to pick.
+                      This is what the user actually wants to see; the text
+                      input below stays for typing tags that aren't installed
+                      yet. */}
+                  {aiLocalModels.length > 0 && (
+                    <div className="local-ai-chips">
+                      {aiLocalModels.map(m => (
+                        <button
+                          key={m.id}
+                          className={`local-ai-chip ${aiLocalModel === m.id ? 'active' : ''}`}
+                          onClick={() => { setAiLocalModel(m.id); persist({ aiLocalModel: m.id }); }}
+                          title={m.size ? `${(m.size / 1024 / 1024 / 1024).toFixed(1)} GB` : ''}
+                        >
+                          <span className="local-ai-chip-name">{m.id}</span>
+                          {m.size ? <span className="local-ai-chip-size">{(m.size / 1024 / 1024 / 1024).toFixed(1)} GB</span> : null}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="settings-control" style={{ marginTop: 6 }}>
-                    <input type="text" value={aiLocalModel}
-                      placeholder="model tag (e.g. llama3:8b, qwen2.5-coder:14b)"
+                    <input
+                      type="text"
+                      value={aiLocalModel}
+                      placeholder={aiLocalModelsLoading
+                        ? 'Discovering models…'
+                        : aiLocalModels.length > 0
+                          ? 'Selected model (or type a tag not in the list above)'
+                          : 'model tag (e.g. llama3:8b, qwen2.5-coder:14b)'}
                       spellCheck={false}
                       onChange={(e) => { setAiLocalModel(e.target.value); persist({ aiLocalModel: e.target.value }); }}
-                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    />
                   </div>
                   <div className="settings-control" style={{ marginTop: 6 }}>
                     <input type="password" value={aiLocalApiKey}
@@ -426,17 +490,14 @@ export function Settings({ onClose }: Props) {
                       onChange={(e) => { setAiLocalApiKey(e.target.value); persist({ aiLocalApiKey: e.target.value }); }}
                       style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
                   </div>
-                  {aiLocalModelsErr && (
-                    <div className="settings-sub" style={{ marginTop: 6, color: 'var(--danger)' }}>
-                      {aiLocalModelsErr}
-                    </div>
-                  )}
                   <ModelCapabilityNote model={aiLocalModel} />
                 </>
               )}
             </div>
           </div>
+          </>}
 
+          {tab === 'appearance' && <>
           <Control
             label="Window transparency"
             sub="Background fades through to the desktop. Text stays solid."
@@ -484,6 +545,7 @@ export function Settings({ onClose }: Props) {
               </div>
             </div>
           </div>
+          </>}
         </div>
       </div>
     </div>

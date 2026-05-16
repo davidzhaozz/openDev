@@ -194,6 +194,11 @@ export type AppSettings = {
   aiLocalBaseUrl?: string;       // OpenAI-compatible endpoint, e.g. http://localhost:11434/v1
   aiLocalModel?: string;         // e.g. "llama3:8b", "qwen2.5-coder:14b"
   aiLocalApiKey?: string;        // optional — Ollama doesn't need one
+
+  // Sticky transport pick — last AI provider the user selected in the
+  // chat composer dropdown. Restored when a fresh chat tab opens so we
+  // don't keep snapping back to Claude after each session restart.
+  lastAiTransport?: 'claude-cli' | 'codex-cli' | 'opencode-cli';
 };
 
 // ── AI Agents ──────────────────────────────────────────────────────────

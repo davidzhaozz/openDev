@@ -59,7 +59,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState('');
   const [text, setText] = useState('');
-  const [transport, setTransport] = useState<'claude-cli' | 'codex-cli' | 'opencode-cli'>('claude-cli');
+  const [transport, setTransportState] = useState<'claude-cli' | 'codex-cli' | 'opencode-cli'>('claude-cli');
   const providerLabel = transport === 'codex-cli' ? 'Codex' : transport === 'opencode-cli' ? 'OpenCode' : 'Claude';
   // Local-AI gate — only show the OpenCode transport when the user has
   // enabled it in Settings → Local AI. Polled on mount + whenever the
@@ -71,6 +71,18 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
     const load = () => window.opendev.settings.get().then(s => {
       setAiLocalEnabled(!!s.aiLocalEnabled);
       setAiLocalModel(s.aiLocalModel || '');
+      // First-load: adopt the last-used transport so a fresh chat tab
+      // defaults to whatever the user picked last, instead of always
+      // snapping to Claude. Guarded by `!loadedTransport.current` so
+      // later settings-changed events (e.g. enabling Local AI) don't
+      // overwrite an in-flight user pick.
+      if (!loadedTransport.current && s.lastAiTransport) {
+        const t = s.lastAiTransport;
+        if (t === 'claude-cli' || t === 'codex-cli' || (t === 'opencode-cli' && s.aiLocalEnabled)) {
+          setTransportState(t);
+        }
+      }
+      loadedTransport.current = true;
     });
     load();
     // Settings.tsx dispatches this on every persist, so a toggle in the
@@ -84,6 +96,14 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
       window.removeEventListener('focus', onChange);
     };
   }, []);
+  const loadedTransport = useRef(false);
+  // Wrap setter so every user pick is persisted to settings. The settings
+  // write also broadcasts via opendev:settings-changed, but we guard our
+  // own load to avoid feedback loops.
+  const setTransport = (t: typeof transport) => {
+    setTransportState(t);
+    window.opendev.settings.set({ lastAiTransport: t });
+  };
   // If the user disabled local AI while the chat had it selected, drop back
   // to Claude so the next send doesn't fire into a disabled transport.
   useEffect(() => {
@@ -334,7 +354,13 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
     [active, attachments, globalAttachments]
   );
 
-  const focusComposer = () => textareaRef.current?.focus();
+  const focusComposer = () => {
+    // Don't yank focus to the composer mid-selection — focus shift cancels
+    // the in-progress text selection and the user can't copy chat content.
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    textareaRef.current?.focus();
+  };
 
   return (
     <div className="panel chat chat-center">
