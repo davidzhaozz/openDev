@@ -89,12 +89,6 @@ async function ensureAccessKey(): Promise<string> {
   return fresh;
 }
 
-function isLoopbackAddress(addr: string | undefined | null): boolean {
-  if (!addr) return false;
-  // Node reports IPv4-mapped IPv6 for IPv4 loopback when listening on
-  // a dual-stack socket; cover all three forms.
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr.startsWith('127.');
-}
 
 type ToolDef = {
   name: string;
@@ -703,18 +697,18 @@ export async function startIdeMcpServer(): Promise<void> {
       return;
     }
     if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
-    // Bearer-token gate for non-loopback clients. The local IDE always
-    // talks to itself over loopback and never needs to present a key;
-    // any other origin (LAN, tunnel) must match the configured key.
-    const remote = req.socket.remoteAddress || '';
-    if (!isLoopbackAddress(remote)) {
+    // Bearer-token gate for ALL clients (loopback included). Tools can
+    // read/write files, run shell commands, and execute agents — there
+    // is no scenario where we want the gate skipped. External CLIs put
+    // the PIN in their ~/.claude.json `headers` block.
+    {
       const auth = req.headers['authorization'] || '';
       const expected = currentAccessKey ? `Bearer ${currentAccessKey}` : '';
       if (!expected || auth !== expected) {
         res.statusCode = 401;
         res.setHeader('WWW-Authenticate', 'Bearer realm="opendev-mcp"');
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized — set Authorization: Bearer <opendev MCP access key>' } }));
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized — set Authorization: Bearer <opendev MCP access PIN from Settings → AI>' } }));
         return;
       }
     }

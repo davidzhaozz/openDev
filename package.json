@@ -1,6 +1,6 @@
 {
   "name": "opendev-ide",
-  "version": "0.7.9",
+  "version": "0.7.10",
   "description": "AI-first JavaScript / TypeScript / Java / C# IDE with embedded browser, SQL client, and Claude integration.",
   "main": "out/main/index.js",
   "author": {

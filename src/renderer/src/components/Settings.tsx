@@ -631,14 +631,16 @@ function McpStatusRow() {
   // machines need to reach it), otherwise loopback.
   const snippetUrl = status?.exposedOnLan && status.lanUrl ? status.lanUrl : localUrl;
   const accessKey = status?.accessKey || '';
-  // LAN clients MUST send the bearer token — include the headers stanza
-  // in the snippet when exposed. Loopback config stays headerless to keep
-  // the common case simple (auth is bypassed for 127.0.0.1).
+  // Every client (loopback included) must send the bearer PIN — the
+  // server no longer makes a localhost exemption. Always emit the
+  // headers stanza so the snippet is copy-paste correct everywhere.
   const cfg = JSON.stringify({
     mcpServers: {
-      'opendev-ide': status?.exposedOnLan
-        ? { type: 'http', url: snippetUrl, headers: { Authorization: `Bearer ${accessKey || '<your-key>'}` } }
-        : { type: 'http', url: snippetUrl }
+      'opendev-ide': {
+        type: 'http',
+        url: snippetUrl,
+        headers: { Authorization: `Bearer ${accessKey || '<PIN from above>'}` }
+      }
     }
   }, null, 2);
 
