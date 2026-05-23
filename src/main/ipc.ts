@@ -24,6 +24,10 @@ import { registerPackagesIpc } from './packages.js';
 import { registerHistoryIpc } from './queryHistory.js';
 import { registerRestIpc } from './rest.js';
 import { registerAiLocalIpc } from './aiLocal.js';
+import { registerMlxIpc } from './mlx.js';
+import { registerPythonIpc } from './python.js';
+import { registerRunConfigsIpc } from './runConfigs.js';
+import { registerPipIpc } from './pip.js';
 import { ipcMain as electronIpc } from 'electron';
 
 export function registerIpc() {
@@ -69,6 +73,10 @@ export function registerIpc() {
   registerHistoryIpc();
   registerRestIpc();
   registerAiLocalIpc();
+  registerMlxIpc();
+  registerPythonIpc();
+  registerRunConfigsIpc();
+  registerPipIpc();
 
   startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
 

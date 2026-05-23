@@ -269,7 +269,7 @@ export type PeersStatus = {
 // A protocol-agnostic vocabulary the renderer consumes. NodeDebugSession
 // (CDP) and JavaDebugSession (JDWP) both translate into these shapes.
 
-export type DebugLang = 'node' | 'java';
+export type DebugLang = 'node' | 'java' | 'python';
 export type DebugStatus = 'starting' | 'running' | 'paused' | 'terminated';
 
 export type StackFrame = {
@@ -294,8 +294,9 @@ export type DebugVar = {
 };
 
 export type DebugStartConfig =
-  | { lang: 'node'; file: string }          // M1: debug a JS file
-  | { lang: 'java'; serviceId: string };    // M2: debug a Maven/Gradle service
+  | { lang: 'node'; file: string }                                              // M1: debug a JS file
+  | { lang: 'java'; serviceId: string }                                         // M2: debug a Maven/Gradle service
+  | { lang: 'python'; file: string; args?: string[]; interpreter?: string };    // M3: debug a Python file via debugpy
 
 export type DebugEventMsg =
   | { kind: 'session-started'; sessionId: string; lang: DebugLang }
@@ -438,3 +439,152 @@ export type RestResponse = {
 };
 
 export type RestResult = RestResponse | { error: string };
+
+// ---------------------------------------------------------------------------
+// Pip / Python packages
+// ---------------------------------------------------------------------------
+
+export type PipPackage = {
+  name: string;
+  version: string;
+  // Populated by the outdated check; null when at the latest or unchecked.
+  latest?: string | null;
+};
+
+export type PipRequirement = {
+  // Raw requirement spec from requirements.txt (e.g. "torch>=2.1,<3").
+  spec: string;
+  // Parsed package name, or null when the line is a URL/path/editable install.
+  name: string | null;
+  // Whether the requirement appears to be currently installed (loose match).
+  installed: boolean;
+  // The installed version if `installed` is true; null otherwise.
+  installedVersion: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Run configurations (PyCharm-style)
+// ---------------------------------------------------------------------------
+
+export type PythonRunConfig = {
+  id: string;
+  name: string;
+  // Either a script path (relative to workspace OR absolute) for "python script.py",
+  // or a module spec for "python -m module" (when mode='module').
+  mode: 'script' | 'module';
+  target: string;                  // script path or module name
+  args: string[];                  // additional argv after the target
+  cwd?: string;                    // relative to workspace; default '.'
+  env?: Record<string, string>;
+  // Per-config interpreter override. When unset, the workspace's selected
+  // interpreter (via python.ts) is used.
+  interpreter?: string;
+};
+
+export type RunStatus = 'starting' | 'running' | 'stopped' | 'error';
+
+export type RunSession = {
+  id: string;                      // unique per-spawn
+  configId: string;                // referenced PythonRunConfig.id
+  configName: string;              // captured at spawn so the panel survives deletes
+  status: RunStatus;
+  pid?: number;
+  startedAt: number;
+  exitCode?: number | null;
+  lastError?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Python interpreter
+// ---------------------------------------------------------------------------
+
+export type PythonInterpreterKind = 'venv' | 'pyenv' | 'conda' | 'homebrew' | 'system' | 'path' | 'framework';
+
+export type PythonInterpreter = {
+  // Absolute path to the python/python3 binary.
+  path: string;
+  // Source category — used by the UI to badge the entry (e.g. "venv", "pyenv:3.11").
+  kind: PythonInterpreterKind;
+  // Human-readable label (e.g. ".venv", "Homebrew (arm64)", "pyenv:3.11.6").
+  label?: string;
+  // Result of `<path> -V` minus the "Python " prefix; null if probe failed.
+  version?: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// MLX / ML project
+// ---------------------------------------------------------------------------
+
+export type MlxProjectInfo = {
+  // Absolute path to the lora_config.yaml that anchors this project.
+  configPath: string;
+  // Parsed config — only fields the IDE knows how to display. Anything
+  // else from the yaml is preserved in `raw` so power users can inspect.
+  model?: string;
+  data?: string;                     // dataset directory (config-relative)
+  fineTuneType?: string;             // 'lora' | 'dora' | 'full' etc
+  numLayers?: number;
+  batchSize?: number;
+  iters?: number;
+  learningRate?: number;
+  maxSeqLength?: number;
+  gradCheckpoint?: boolean;
+  stepsPerReport?: number;
+  stepsPerEval?: number;
+  valBatches?: number;
+  saveEvery?: number;
+  adapterPath?: string;              // config-relative
+  loraRank?: number;
+  loraScale?: number;
+  loraDropout?: number;
+  raw?: Record<string, unknown>;
+
+  // Resolved on-disk locations (best-effort; null when the file/dir
+  // referenced by the config can't be found anywhere reasonable).
+  resolvedAdapterDir?: string | null;
+  resolvedDataDir?: string | null;
+  // Python interpreter we'll use to run training. Prefers a .venv next
+  // to the workspace; falls back to `python3` on PATH.
+  python?: string;
+  hasVenv?: boolean;
+  // Auto-registered service id. Stable so the UI can subscribe to its
+  // logs and call services.start/stop without a separate spawn channel.
+  serviceId?: string;
+};
+
+export type MlxAdapter = {
+  path: string;                      // absolute
+  name: string;                      // file basename
+  iter: number | null;               // parsed from "0001200_adapters.safetensors", null for the latest pointer
+  sizeBytes: number;
+  modifiedAt: number;                // epoch ms
+  isLatestPointer: boolean;          // true for the plain "adapters.safetensors"
+};
+
+// One parsed event from the MLX training stdout stream.
+export type MlxTrainEvent =
+  | {
+      kind: 'train';
+      iter: number;
+      trainLoss: number;
+      learningRate: number;
+      itPerSec: number;
+      tokensPerSec: number;
+      trainedTokens: number;
+      peakMemGb: number;
+      ts: number;
+    }
+  | { kind: 'val'; iter: number; valLoss: number; valTookSec: number; ts: number }
+  | { kind: 'saved'; iter: number; paths: string[]; ts: number }
+  | { kind: 'started'; ts: number }
+  | { kind: 'exited'; code: number | null; ts: number };
+
+export type MlxStatus = {
+  detected: boolean;
+  info?: MlxProjectInfo;
+  // Live training state — replayed to a new MlxPanel mount via mlx:status
+  // so we don't lose the metrics history when the user toggles tabs.
+  running: boolean;
+  serviceId?: string;
+  events: MlxTrainEvent[];          // capped to the most recent N (~500)
+};

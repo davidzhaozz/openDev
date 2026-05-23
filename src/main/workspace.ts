@@ -41,6 +41,12 @@ class Workspace {
       const recent = [path, ...s.recentWorkspaces.filter(p => p !== path)].slice(0, 10);
       await patchSettings({ workspaceRoot: path, recentWorkspaces: recent });
     }
+    // Per-workspace caches in other modules (interpreter list, MLX detection)
+    // must be flushed so the new project doesn't see stale state.
+    try {
+      const py = await import('./python.js');
+      py.invalidatePythonCache();
+    } catch { /* python module may not have loaded yet */ }
     // Watch only the workspace root, non-recursive. The previous chokidar v4
     // setup ate ~one fd per watched file and blew past the macOS soft limit
     // (~256 fds for a Finder-launched .app) on real-world workspaces, causing

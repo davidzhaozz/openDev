@@ -167,6 +167,46 @@ export const IPC = {
   RestSave: 'rest:save',
   RestDelete: 'rest:delete',
 
+  // run configurations (PyCharm-style)
+  RunConfigsList: 'run-configs:list',
+  RunConfigsSave: 'run-configs:save',
+  RunConfigsDelete: 'run-configs:delete',
+  RunsStart: 'runs:start',
+  RunsStartAdHoc: 'runs:start-adhoc',
+  RunsStop: 'runs:stop',
+  RunsList: 'runs:list',
+  RunsLog: 'runs:log',                  // main → renderer (stdout/stderr chunk)
+  RunsStatus: 'runs:status',            // main → renderer (state change)
+  RunsChanged: 'runs:changed',          // main → renderer (config list mutated)
+
+  // pip / python packages
+  PipList: 'pip:list',
+  PipOutdated: 'pip:outdated',
+  PipInstall: 'pip:install',
+  PipUninstall: 'pip:uninstall',
+  PipUpgrade: 'pip:upgrade',
+  PipReadRequirements: 'pip:read-requirements',
+  PipInstallRequirements: 'pip:install-requirements',
+  PipLog: 'pip:log',                       // main → renderer (streaming pip output)
+  PipBusy: 'pip:busy',                     // main → renderer (true while an operation runs)
+
+  // python interpreter
+  PythonList: 'python:list',
+  PythonGet: 'python:get',
+  PythonSet: 'python:set',
+  PythonCreateVenv: 'python:create-venv',
+  PythonVenvLog: 'python:venv-log',         // main → renderer (venv creation log lines)
+  PythonChanged: 'python:changed',          // main → renderer (selected interpreter changed)
+
+  // mlx / ml project
+  MlxDetect: 'mlx:detect',
+  MlxListAdapters: 'mlx:list-adapters',
+  MlxReadLog: 'mlx:read-log',
+  MlxStart: 'mlx:start',
+  MlxStop: 'mlx:stop',
+  MlxStatus: 'mlx:status',
+  MlxEvent: 'mlx:event',                  // main → renderer (parsed training events)
+
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning'
 } as const;

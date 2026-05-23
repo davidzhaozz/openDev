@@ -14,6 +14,15 @@ import type {
   ToolInstallResult,
   ChatAttachment,
   Conversation,
+  MlxAdapter,
+  MlxProjectInfo,
+  MlxStatus,
+  MlxTrainEvent,
+  PipPackage,
+  PipRequirement,
+  PythonInterpreter,
+  PythonRunConfig,
+  RunSession,
   RestRequestSpec,
   RestResult,
   RestSavedRequest,
@@ -110,6 +119,49 @@ const api = {
     conversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.AiConversations),
     conversation: (id: string): Promise<Conversation | null> => ipcRenderer.invoke(IPC.AiConversationGet, id),
     deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id)
+  },
+  pip: {
+    list: (): Promise<PipPackage[]> => ipcRenderer.invoke(IPC.PipList),
+    outdated: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.PipOutdated),
+    install: (spec: string): Promise<void> => ipcRenderer.invoke(IPC.PipInstall, spec),
+    uninstall: (name: string): Promise<void> => ipcRenderer.invoke(IPC.PipUninstall, name),
+    upgrade: (name: string): Promise<void> => ipcRenderer.invoke(IPC.PipUpgrade, name),
+    readRequirements: (path?: string): Promise<{ path: string; requirements: PipRequirement[] } | null> =>
+      ipcRenderer.invoke(IPC.PipReadRequirements, path),
+    installRequirements: (path: string): Promise<void> => ipcRenderer.invoke(IPC.PipInstallRequirements, path),
+    onLog: (cb: (chunk: string) => void) => on(IPC.PipLog, cb),
+    onBusy: (cb: (busy: boolean) => void) => on(IPC.PipBusy, cb)
+  },
+  runs: {
+    listConfigs: (): Promise<PythonRunConfig[]> => ipcRenderer.invoke(IPC.RunConfigsList),
+    saveConfig: (cfg: PythonRunConfig): Promise<PythonRunConfig> => ipcRenderer.invoke(IPC.RunConfigsSave, cfg),
+    deleteConfig: (id: string): Promise<void> => ipcRenderer.invoke(IPC.RunConfigsDelete, id),
+    start: (configId: string): Promise<RunSession> => ipcRenderer.invoke(IPC.RunsStart, configId),
+    startAdHoc: (spec: Omit<PythonRunConfig, 'id'>): Promise<RunSession> => ipcRenderer.invoke(IPC.RunsStartAdHoc, spec),
+    stop: (sessionId: string): Promise<void> => ipcRenderer.invoke(IPC.RunsStop, sessionId),
+    listSessions: (): Promise<RunSession[]> => ipcRenderer.invoke(IPC.RunsList),
+    logReplay: (id: string): Promise<string> => ipcRenderer.invoke('runs:log-replay', id),
+    onLog: (cb: (m: { id: string; chunk: string }) => void) => on(IPC.RunsLog, cb),
+    onStatus: (cb: (s: RunSession) => void) => on(IPC.RunsStatus, cb),
+    onChanged: (cb: () => void) => on(IPC.RunsChanged, cb)
+  },
+  python: {
+    list: (force?: boolean): Promise<PythonInterpreter[]> => ipcRenderer.invoke(IPC.PythonList, !!force),
+    get: (): Promise<PythonInterpreter | null> => ipcRenderer.invoke(IPC.PythonGet),
+    set: (path: string): Promise<PythonInterpreter | null> => ipcRenderer.invoke(IPC.PythonSet, path),
+    createVenv: (opts: { basePython: string; dirName?: string }): Promise<PythonInterpreter | null> =>
+      ipcRenderer.invoke(IPC.PythonCreateVenv, opts),
+    onChanged: (cb: (p: PythonInterpreter | null) => void) => on(IPC.PythonChanged, cb),
+    onVenvLog: (cb: (line: string) => void) => on(IPC.PythonVenvLog, cb)
+  },
+  mlx: {
+    detect: (): Promise<MlxProjectInfo | null> => ipcRenderer.invoke(IPC.MlxDetect),
+    listAdapters: (): Promise<MlxAdapter[]> => ipcRenderer.invoke(IPC.MlxListAdapters),
+    readLog: (path?: string): Promise<MlxTrainEvent[]> => ipcRenderer.invoke(IPC.MlxReadLog, path),
+    start: (): Promise<void> => ipcRenderer.invoke(IPC.MlxStart),
+    stop: (): Promise<void> => ipcRenderer.invoke(IPC.MlxStop),
+    status: (): Promise<MlxStatus> => ipcRenderer.invoke(IPC.MlxStatus),
+    onEvent: (cb: (ev: MlxTrainEvent) => void) => on(IPC.MlxEvent, cb)
   },
   aiLocal: {
     // Pass `baseUrl` to probe a candidate that isn't saved yet (e.g. while
@@ -290,7 +342,7 @@ const api = {
     load: (): Promise<{
       tabs: Array<{ kind: string; path?: string; name?: string; cwd?: string; url?: string; conversationId?: string }>;
       activeIndex?: number;
-      rightTab?: 'ai' | 'db' | 'es';
+      rightTab?: 'ai' | 'db' | 'es' | 'rest' | 'ml';
       sqlConnId?: string;
       sqlText?: string;
       esText?: string;

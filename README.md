@@ -1,6 +1,6 @@
 # openDev
 
-**An AI-first JavaScript & TypeScript IDE for macOS.** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, and a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code.
+**An AI-first IDE for macOS — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
 
 ---
 
@@ -21,8 +21,8 @@ If you live in JS / TS, use Claude for coding, and want one app for code + AI + 
 ## Features
 
 **Editor & navigation**
-- CodeMirror 6 with TypeScript, JavaScript, HTML, CSS, JSON, Markdown, SQL syntaxes
-- TypeScript Language Server: hover, go-to-definition, completions, diagnostics
+- CodeMirror 6 with TypeScript, JavaScript, **Python**, HTML, CSS, JSON / JSONL, Markdown, SQL, **YAML** syntaxes
+- TypeScript Language Server and **Pyright** language server (auto-routed by file extension): hover, go-to-definition, completions, diagnostics
 - Project-wide fuzzy file finder
 - Find-in-files powered by `ripgrep`
 - Tab tear-off into popout windows
@@ -47,6 +47,14 @@ If you live in JS / TS, use Claude for coding, and want one app for code + AI + 
 - Results grid with sort, copy as CSV / JSON / Markdown, and inline cell editing that builds safe parameterized `UPDATE` statements
 - Read-only connection mode for production
 - Passwords stored in macOS Keychain via `keytar`, never on disk
+
+**Python & ML (PyCharm-style, opt-in per workspace)**
+- **Interpreter picker** in the Project panel header — detects workspace `.venv`/`venv`, Homebrew Python (both arches), Apple system Python, `python.org` framework builds, pyenv, conda/miniforge/anaconda envs, and PATH. One click to switch; Pyright auto-restarts against the new interpreter
+- **Create .venv** straight from the popover (streams `python -m venv` output, auto-selects on success)
+- **Run / Debug configurations** — PyCharm-style toolbar above the editor, dropdown of saved configs, "▶ this file" for one-offs, "Edit Configurations…" modal (script vs module mode, args, cwd, env, per-config interpreter override). Output streams to a dedicated **Run** bottom-panel tab with per-session pills
+- **Python debugger via `debugpy`** — set breakpoints in the gutter, ▶ Debug starts a DAP session, paused-line highlight + frames / scopes / variables / step controls all work in the existing DEBUG panel
+- **Package manager (pip)** — center-tab opened from the Python picker. Installed list with version + outdated badge, install / uninstall / upgrade with streaming `pip` log, `requirements.txt` detection with installed-vs-missing pills and a `pip install -r` button
+- **MLX-LM training panel** — auto-detected when a `lora_config.yaml` is present (root or `training/`). Right-side "ML" tab with parsed config summary, live training metrics (Iter / Train loss / Val loss / Tokens-per-sec / Peak mem), progress bar + train/val loss chart that seeds from `train.log` and updates live as `mlx_lm.lora` runs, and an adapter / checkpoints browser sorted by iter with copy-path + reveal-in-Finder actions. The training command auto-registers as a service so start / stop / restart and log streaming work the same as any other runnable
 
 **Services & ports**
 - Auto-detect runnable services from `apps/*/package.json` and `packages/*/package.json`
@@ -83,6 +91,7 @@ If you live in JS / TS, use Claude for coding, and want one app for code + AI + 
 - Node.js 20+ and npm
 - (Optional) `claude` CLI from Anthropic if you want the CLI streaming path
 - (Optional) `codex` CLI if you want OpenAI / Codex streaming
+- (Optional, for Python projects) Python 3.10+ on PATH or in a workspace `.venv/`. The Python toolchain (`debugpy`, `mlx-lm`, project deps) installs via the in-app Packages tab; nothing extra to set up globally
 
 ### Install & run
 

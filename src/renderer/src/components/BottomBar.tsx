@@ -1,6 +1,7 @@
 import { useStore } from '../state/store';
 import { LogPanel } from '../panels/LogPanel';
 import { DebugPanel } from '../panels/DebugPanel';
+import { RunPanel } from '../panels/RunPanel';
 
 // Application bottom bar — hosts LOG and DEBUG panels that used to live in
 // the right column. Collapsing leaves only the tab strip visible so the
@@ -15,7 +16,7 @@ export function BottomBar() {
   return (
     <div className={`bottom-bar ${collapsed ? 'collapsed' : ''}`}>
       <div className="bottom-tabs">
-        {(['log', 'debug'] as const).map(k => (
+        {(['log', 'debug', 'run'] as const).map(k => (
           <div
             key={k}
             className={`bottom-tab ${tab === k ? 'active' : ''}`}
@@ -25,7 +26,7 @@ export function BottomBar() {
             }}
             title={tab === k ? (collapsed ? 'Expand' : 'Collapse') : `Show ${k.toUpperCase()}`}
           >
-            {k === 'log' ? 'LOG' : 'DEBUG'}
+            {k === 'log' ? 'LOG' : k === 'debug' ? 'DEBUG' : 'RUN'}
           </div>
         ))}
         <span className="grow" />
@@ -42,6 +43,9 @@ export function BottomBar() {
           </div>
           <div style={{ height: '100%', display: tab === 'debug' ? 'flex' : 'none', flexDirection: 'column' }}>
             <DebugPanel />
+          </div>
+          <div style={{ height: '100%', display: tab === 'run' ? 'flex' : 'none', flexDirection: 'column' }}>
+            <RunPanel />
           </div>
         </div>
       )}

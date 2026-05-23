@@ -33,10 +33,11 @@ export type CenterTab =
   | { kind: 'ai'; id: string; name: string; conversationId?: string; initialPrompt?: string }
   | { kind: 'design-proposals'; id: string; name: string; proposals: DesignProposal[]; targetPath?: string }
   | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string }
-  | { kind: 'rest'; id: string; name: string; savedId?: string };
+  | { kind: 'rest'; id: string; name: string; savedId?: string }
+  | { kind: 'pip'; id: string; name: string };
 
-export type BottomTabKey = 'log' | 'debug';
-export type RightTabKey = 'ai' | 'db' | 'es' | 'rest';
+export type BottomTabKey = 'log' | 'debug' | 'run';
+export type RightTabKey = 'ai' | 'db' | 'es' | 'rest' | 'ml';
 
 export function emptyRestSpec(): RestRequestSpec {
   return {
@@ -71,6 +72,7 @@ type Store = {
   openSqlTab: () => void;
   openEsTab: () => void;
   openRestTab: (opts?: { spec?: RestRequestSpec; name?: string; savedId?: string }) => string;
+  openPipTab: () => string;
   openDiffTab: (opts: { filePath: string; hash?: string; diff: string }) => void;
   openAiTaskTab: (opts?: { goal?: string; priorities?: string[] }) => void;
   openAiChatTab: (opts?: { conversationId?: string; name?: string; focusIfOpen?: boolean; initialPrompt?: string }) => string;
@@ -302,6 +304,18 @@ export const useStore = create<Store>((set, get) => ({
     const tab: CenterTab = { kind: 'es', id, name: 'ES' };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
   }),
+  openPipTab: () => {
+    const state = get();
+    const existing = state.centerTabs.find((t) => t.kind === 'pip');
+    if (existing) {
+      set({ activeCenterId: existing.id });
+      return existing.id;
+    }
+    const id = nextTabId();
+    const tab: CenterTab = { kind: 'pip', id, name: 'Packages' };
+    set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
+    return id;
+  },
   openRestTab: (opts) => {
     // Singleton — one REST workspace tab; selecting a saved request from
     // the right panel reuses it with the new spec loaded.

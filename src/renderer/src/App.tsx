@@ -25,6 +25,10 @@ import { SqlWorkspace } from './panels/SqlWorkspace';
 import { EsWorkspace } from './panels/EsWorkspace';
 import { RestWorkspace } from './panels/RestWorkspace';
 import { RestRequestsPanel } from './panels/RestRequestsPanel';
+import { MlxPanel } from './panels/MlxPanel';
+import { PipPanel } from './panels/PipPanel';
+import { PythonPicker } from './components/PythonPicker';
+import { RunBar } from './components/RunBar';
 import { BottomBar } from './components/BottomBar';
 
 export default function App() {
@@ -55,6 +59,7 @@ export default function App() {
   const bottomTab = useStore(s => s.bottomTab);
   const [showSettings, setShowSettings] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<{ hasBrew: boolean } | null>(null);
+  const [mlxDetected, setMlxDetected] = useState(false);
   const tabDragRef = useRef<
     | { kind: 'file'; id: string; path: string; startX: number; startY: number; outside: boolean }
     | { kind: 'ai'; id: string; conversationId?: string; name: string; startX: number; startY: number; outside: boolean }
@@ -87,6 +92,32 @@ export default function App() {
     (async () => {
       const r = await window.opendev.tools.check();
       if (alive && !r.npm) setInstallPrompt({ hasBrew: r.brew });
+    })();
+    return () => { alive = false; };
+  }, [root]);
+
+  // Probe for an MLX-LM project on workspace change. When found, the ML
+  // right-panel tab becomes available and is auto-selected on first detect.
+  // When NOT found, also snap rightTab off 'ml' so a stale session-restored
+  // value doesn't leave the right column blank.
+  useEffect(() => {
+    if (!root) {
+      setMlxDetected(false);
+      if (useStore.getState().rightTab === 'ml') useStore.getState().setRightTab('ai');
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const info = await window.opendev.mlx.detect();
+      if (!alive) return;
+      const found = !!info;
+      setMlxDetected(found);
+      const cur = useStore.getState().rightTab;
+      if (found && cur === 'ai') {
+        useStore.getState().setRightTab('ml');
+      } else if (!found && cur === 'ml') {
+        useStore.getState().setRightTab('ai');
+      }
     })();
     return () => { alive = false; };
   }, [root]);
@@ -138,14 +169,16 @@ export default function App() {
           useStore.getState().openEsTab();
         } else if (t.kind === 'ai') {
           useStore.getState().openAiChatTab({ conversationId: t.conversationId, name: t.name });
+        } else if (t.kind === 'pip') {
+          useStore.getState().openPipTab();
         }
       }
       // Validate the restored tab against the current set; fall back to
       // 'ai' if the saved value is from a previous layout. (LOG/DEBUG used
       // to live here too — those sessions now restore as 'ai'.)
-      const validTabs = ['ai', 'db', 'es', 'rest'] as const;
+      const validTabs = ['ai', 'db', 'es', 'rest', 'ml'] as const;
       const restoredTab = validTabs.includes(s.rightTab as any) ? s.rightTab : 'ai';
-      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest');
+      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest' | 'ml');
       if (s.sqlConnId) useStore.getState().setSqlConnId(s.sqlConnId);
       if (s.sqlText) useStore.getState().setSqlText(s.sqlText);
       if (s.esText) useStore.getState().setEsText(s.esText);
@@ -295,14 +328,14 @@ export default function App() {
 
   // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
   useEffect(() => {
-    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number; tab?: 'ai' | 'db' | 'es' | 'rest' | 'log' | 'debug'; savedId?: string; send?: boolean }) => {
+    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number; tab?: 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'log' | 'debug'; savedId?: string; send?: boolean }) => {
       if (cmd?.kind === 'open-file' && cmd.path) {
         openFileFromPath(cmd.path).then(() => {
           if (cmd.line != null) setPendingJump({ path: cmd.path!, line: cmd.line, col: cmd.col ?? 0 });
         });
       } else if (cmd?.kind === 'set-right-tab' && cmd.tab) {
-        const t = cmd.tab as 'ai' | 'db' | 'es' | 'rest';
-        if (['ai', 'db', 'es', 'rest'].includes(t)) setRightTab(t);
+        const t = cmd.tab as 'ai' | 'db' | 'es' | 'rest' | 'ml';
+        if (['ai', 'db', 'es', 'rest', 'ml'].includes(t)) setRightTab(t);
       } else if (cmd?.kind === 'set-bottom-tab' && cmd.tab) {
         const t = cmd.tab as 'log' | 'debug';
         if (['log', 'debug'].includes(t)) {
@@ -422,6 +455,7 @@ export default function App() {
             <div className="panel-header">
               <span>Project</span>
               <span className="grow" />
+              <PythonPicker />
               <button className="icon" title="Refresh file tree" onClick={() => window.dispatchEvent(new Event('opendev:filetree-refresh'))}>↻</button>
             </div>
             <div className="panel-body" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
@@ -564,6 +598,7 @@ export default function App() {
               {tabs.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--fg-3)', fontSize: 11 }}>Cmd+P to find a file • Cmd+` for terminal</div>}
             </div>
             <DebugToolbar active={active} />
+            <RunBar activeFilePath={active?.kind === 'file' ? active.path : undefined} />
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, background: 'var(--bg-0)' }}>
               {!active && (
                 <div className="empty-state">
@@ -594,6 +629,7 @@ export default function App() {
                   {t.kind === 'sql' && <SqlWorkspace />}
                   {t.kind === 'es' && <EsWorkspace />}
                   {t.kind === 'rest' && <RestWorkspace tabId={t.id} />}
+                  {t.kind === 'pip' && <PipPanel />}
                   {t.kind === 'diff' && <DiffWorkspace filePath={t.filePath} hash={t.hash} diff={t.diff} />}
                   {t.kind === 'ai-task' && <AiTaskWorkspace />}
                   {t.kind === 'ai' && (
@@ -617,15 +653,16 @@ export default function App() {
 
         <div className="col-right" style={{ width: layout.rightW, flex: `0 0 ${layout.rightW}px`, display: 'flex', flexDirection: 'column' }}>
           <div className="right-tabs">
-            {[
+            {([
               ['ai', 'AI'],
               ['db', 'DB'],
               ['es', 'ES'],
-              ['rest', 'REST']
-            ].map(([k, label]) => (
+              ['rest', 'REST'],
+              ...(mlxDetected ? [['ml', 'ML'] as const] : [])
+            ] as const).map(([k, label]) => (
               <div key={k}
                 className={`right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest')}>{label}</div>
+                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest' | 'ml')}>{label}</div>
             ))}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -641,13 +678,26 @@ export default function App() {
             <div style={{ flex: 1, minHeight: 0, display: rightTab === 'rest' ? 'flex' : 'none', flexDirection: 'column' }}>
               <RestRequestsPanel />
             </div>
+            {mlxDetected && (
+              <div style={{ flex: 1, minHeight: 0, display: rightTab === 'ml' ? 'flex' : 'none', flexDirection: 'column' }}>
+                <MlxPanel />
+              </div>
+            )}
           </div>
-          {/* Bottom-of-right-column: AI Agents panel, vertically split off */}
-          <Resizer orientation="horizontal" value={layout.agentsH} min={120} max={600}
-            onChange={(v) => setLayout({ agentsH: v })} invert />
-          <div style={{ height: layout.agentsH, flex: `0 0 ${layout.agentsH}px`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <AgentsPanel />
-          </div>
+          {/* Bottom-of-right-column: AI Agents panel, vertically split off.
+              Suppressed entirely for ML projects — agents aren't relevant to
+              MLX-LM training regardless of which right-tab is in focus, and
+              the panel just steals vertical space from the loss chart and
+              adapter list. */}
+          {!mlxDetected && (
+            <>
+              <Resizer orientation="horizontal" value={layout.agentsH} min={120} max={600}
+                onChange={(v) => setLayout({ agentsH: v })} invert />
+              <div style={{ height: layout.agentsH, flex: `0 0 ${layout.agentsH}px`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <AgentsPanel />
+              </div>
+            </>
+          )}
         </div>
 
         </div>{/* /.workspace-row */}
@@ -764,11 +814,20 @@ function DebugToolbar({ active }: { active: ReturnType<typeof useStore.getState>
     if (bottomCollapsed) toggleBottom();
   };
   const isJsFile = active?.kind === 'file' && /\.(m?js|cjs)$/i.test(active.path);
-  if (!session && !isJsFile) return null;
+  const isPyFile = active?.kind === 'file' && /\.pyi?$/i.test(active.path);
+  if (!session && !isJsFile && !isPyFile) return null;
   const startNode = async () => {
     if (!isJsFile || active?.kind !== 'file') return;
     try {
       await window.opendev.debug.start({ lang: 'node', file: active.path });
+    } catch (err) {
+      showToast(`Debug start failed: ${(err as Error).message}`, 5000);
+    }
+  };
+  const startPython = async () => {
+    if (!isPyFile || active?.kind !== 'file') return;
+    try {
+      await window.opendev.debug.start({ lang: 'python', file: active.path });
     } catch (err) {
       showToast(`Debug start failed: ${(err as Error).message}`, 5000);
     }
@@ -780,6 +839,9 @@ function DebugToolbar({ active }: { active: ReturnType<typeof useStore.getState>
     <div className="debug-toolbar">
       {!session && isJsFile && (
         <button className="dbg-debug" onClick={startNode}>▶ Debug</button>
+      )}
+      {!session && isPyFile && (
+        <button className="dbg-debug" onClick={startPython} title="Debug this .py file via debugpy (install: pip install debugpy)">▶ Debug</button>
       )}
       {session && (
         <>

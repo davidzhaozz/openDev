@@ -34,6 +34,29 @@ const LOG_TAIL = 1000;
 
 class ServiceManager {
   private runtimes = new Map<string, { proc: ChildProcess; runtime: ServiceRuntime; log: string[] }>();
+  // Internal listeners — other main-process modules (e.g. mlx.ts) hook
+  // these to parse a service's stdout without re-spawning the process.
+  private logListeners = new Set<(id: string, chunk: string) => void>();
+  private statusListeners = new Set<(r: ServiceRuntime) => void>();
+
+  onLogChunk(cb: (id: string, chunk: string) => void): () => void {
+    this.logListeners.add(cb);
+    return () => this.logListeners.delete(cb);
+  }
+  onStatusChange(cb: (r: ServiceRuntime) => void): () => void {
+    this.statusListeners.add(cb);
+    return () => this.statusListeners.delete(cb);
+  }
+  private emitLog(id: string, chunk: string): void {
+    for (const cb of this.logListeners) {
+      try { cb(id, chunk); } catch (e) { console.error('[services] log listener threw', e); }
+    }
+  }
+  private emitStatus(r: ServiceRuntime): void {
+    for (const cb of this.statusListeners) {
+      try { cb(r); } catch (e) { console.error('[services] status listener threw', e); }
+    }
+  }
 
   storePath(): string {
     const root = workspace.getRoot();
@@ -62,7 +85,37 @@ class ServiceManager {
         store = { items: legacy.items.map(i => ({ id: i.id, name: i.name, command: i.command, cwd: i.workingDir })) };
       } catch {}
     }
-    return store?.items ?? [];
+    const userItems = store?.items ?? [];
+    const autoItems = await this.autoServices(root);
+    // Auto items appear first, but a user-saved item with the same id wins
+    // (lets a user customize the auto-detected MLX command without losing it
+    // on next workspace open). Filter overrides out of the auto list.
+    const userIds = new Set(userItems.map((s) => s.id));
+    const merged = [...autoItems.filter((s) => !userIds.has(s.id)), ...userItems];
+    return merged;
+  }
+
+  // Workspace-derived "auto" services that show up without the user
+  // explicitly adding them. Currently: MLX-LM LoRA training. id is stable
+  // and prefixed with "auto-" so the UI hides delete/edit affordances.
+  private async autoServices(root: string): Promise<ServiceDef[]> {
+    const out: ServiceDef[] = [];
+    try {
+      const { detectMlxProject, buildTrainCommand, MLX_AUTO_SERVICE_ID } = await import('./mlx.js');
+      const info = await detectMlxProject();
+      if (info) {
+        out.push({
+          id: MLX_AUTO_SERVICE_ID,
+          name: 'mlx-lora-train',
+          cwd: '.',
+          command: await buildTrainCommand(info)
+        });
+      }
+    } catch (e) {
+      // mlx import failing must never break the services list.
+      console.warn('[services] auto-detect mlx failed', (e as Error).message);
+    }
+    return out;
   }
 
   async deriveFromDir(absPath: string): Promise<{ name: string; command: string; cwd: string }> {
@@ -130,6 +183,34 @@ class ServiceManager {
       }
     } catch { /* unreadable dir — fall through */ }
 
+    // 5. MLX-LM LoRA — a lora_config.yaml signals an MLX fine-tune project.
+    //    Prefer a project-local .venv when present.
+    if (await has('lora_config.yaml')) {
+      const venvLora = join(norm, '.venv', 'bin', 'mlx_lm.lora');
+      const venvPy = join(norm, '.venv', 'bin', 'python');
+      let command = 'python3 -m mlx_lm.lora --config lora_config.yaml';
+      try { await fs.access(venvLora); command = '.venv/bin/mlx_lm.lora --config lora_config.yaml'; }
+      catch {
+        try { await fs.access(venvPy); command = '.venv/bin/python -m mlx_lm.lora --config lora_config.yaml'; } catch {}
+      }
+      return { name, command, cwd };
+    }
+
+    // 6. Generic Python — pick the most "entry"-looking script. Doesn't try
+    //    to be clever about pyproject scripts; the user can edit.
+    try {
+      const entries = await fs.readdir(norm);
+      const pyEntry = ['main.py', 'app.py', 'run.py', 'server.py', 'train.py'].find((f) => entries.includes(f));
+      const hasPy = pyEntry || entries.some((e) => e.endsWith('.py'));
+      if (hasPy || (await has('requirements.txt')) || (await has('pyproject.toml'))) {
+        const venvPy = join(norm, '.venv', 'bin', 'python');
+        let pyBin = 'python3';
+        try { await fs.access(venvPy); pyBin = '.venv/bin/python'; } catch {}
+        const command = pyEntry ? `${pyBin} ${pyEntry}` : `${pyBin}`;
+        return { name, command, cwd };
+      }
+    } catch { /* unreadable dir — fall through */ }
+
     // Nothing recognized — leave a generic placeholder for the user to edit.
     return { name, command: 'npm run dev', cwd };
   }
@@ -178,7 +259,7 @@ class ServiceManager {
     const cwd = isAbsolute(def.cwd) ? def.cwd : resolve(root, def.cwd);
     const log: string[] = [];
     const runtime: ServiceRuntime = { id, status: 'starting', startedAt: Date.now() };
-    const broadcast = () => safeSend(IPC.ServicesStatus, runtime);
+    const broadcast = () => { safeSend(IPC.ServicesStatus, runtime); this.emitStatus(runtime); };
 
     // Pre-flight: if this service has a known port (def.port), free it
     // before spawning. Otherwise the new process will EADDRINUSE-fail
@@ -248,6 +329,7 @@ class ServiceManager {
         log.push(s);
         while (log.length > LOG_TAIL) log.shift();
         safeSend(IPC.ServicesLog, { id, chunk: s });
+        this.emitLog(id, s);
         if (runtime.status === 'starting') {
           runtime.status = 'running';
           broadcast();

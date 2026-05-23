@@ -17,6 +17,7 @@ asarUnpack:
   - "node_modules/typescript/**/*"
   - "node_modules/vscode-jsonrpc/**/*"
   - "node_modules/vscode-languageserver-protocol/**/*"
+  - "node_modules/pyright/**/*"
 mac:
   category: public.app-category.developer-tools
   target:

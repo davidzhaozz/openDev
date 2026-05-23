@@ -37,6 +37,8 @@ import { markdown } from '@codemirror/lang-markdown';
 import { sql } from '@codemirror/lang-sql';
 import { java } from '@codemirror/lang-java';
 import { csharp as csharpLegacy } from '@codemirror/legacy-modes/mode/clike';
+import { python as pythonLegacy } from '@codemirror/legacy-modes/mode/python';
+import { yaml as yamlLegacy } from '@codemirror/legacy-modes/mode/yaml';
 import { StreamLanguage } from '@codemirror/language';
 
 function langForPath(path: string) {
@@ -44,13 +46,15 @@ function langForPath(path: string) {
   switch (ext) {
     case 'ts': case 'tsx': return javascript({ typescript: true, jsx: ext === 'tsx' });
     case 'js': case 'jsx': case 'mjs': case 'cjs': return javascript({ jsx: true });
-    case 'json': return json();
+    case 'json': case 'jsonl': return json();
     case 'css': case 'scss': return css();
     case 'html': case 'htm': return html();
     case 'md': case 'mdx': return markdown();
     case 'sql': return sql();
     case 'java': return java();
     case 'cs': case 'csx': return StreamLanguage.define(csharpLegacy);
+    case 'py': case 'pyi': return StreamLanguage.define(pythonLegacy);
+    case 'yaml': case 'yml': return StreamLanguage.define(yamlLegacy);
     default: return javascript();
   }
 }
@@ -62,6 +66,7 @@ function languageIdFor(path: string): string | null {
     case 'tsx': return 'typescriptreact';
     case 'js': case 'mjs': case 'cjs': return 'javascript';
     case 'jsx': return 'javascriptreact';
+    case 'py': case 'pyi': return 'python';
     default: return null;
   }
 }
