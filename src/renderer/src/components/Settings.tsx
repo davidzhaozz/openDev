@@ -610,10 +610,39 @@ export function Settings({ onClose }: Props) {
 }
 
 function McpStatusRow() {
-  const [status, setStatus] = useState<{ running: boolean; url?: string; port?: number; error?: string } | null>(null);
-  useEffect(() => { window.opendev.mcp.status().then(setStatus); }, []);
-  const url = status?.url || 'http://127.0.0.1:53825/';
-  const cfg = JSON.stringify({ mcpServers: { 'opendev-ide': { type: 'http', url } } }, null, 2);
+  const [status, setStatus] = useState<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string } | null>(null);
+  // Saved value (last persisted to disk) vs pending (current checkbox state).
+  // We don't persist on toggle — the user has to click Apply, which writes
+  // the setting and relaunches the app so the MCP server re-binds cleanly.
+  const [savedExpose, setSavedExpose] = useState(false);
+  const [pendingExpose, setPendingExpose] = useState(false);
+  const [applying, setApplying] = useState(false);
+  useEffect(() => {
+    window.opendev.mcp.status().then(setStatus);
+    window.opendev.settings.get().then((s: AppSettings) => {
+      const v = s.mcpExposeOnLan === true;
+      setSavedExpose(v);
+      setPendingExpose(v);
+    });
+  }, []);
+  const dirty = pendingExpose !== savedExpose;
+  const localUrl = status?.url || 'http://127.0.0.1:53825/';
+  // Snippet uses the LAN URL when exposed (that's the whole point — other
+  // machines need to reach it), otherwise loopback.
+  const snippetUrl = status?.exposedOnLan && status.lanUrl ? status.lanUrl : localUrl;
+  const cfg = JSON.stringify({ mcpServers: { 'opendev-ide': { type: 'http', url: snippetUrl } } }, null, 2);
+
+  const onApply = async () => {
+    setApplying(true);
+    try {
+      await window.opendev.settings.set({ mcpExposeOnLan: pendingExpose });
+      await window.opendev.app.relaunch();
+      // App is being torn down; nothing more to do here.
+    } catch {
+      setApplying(false);
+    }
+  };
+
   return (
     <div className="settings-row">
       <div className="settings-row-text">
@@ -629,9 +658,53 @@ function McpStatusRow() {
           <span style={{ color: status?.running ? 'var(--ok)' : 'var(--danger)', fontSize: 12 }}>
             {status?.running ? '● running' : '○ not running'}
           </span>
-          <span className="settings-value" style={{ fontFamily: 'var(--font-mono)' }}>{url}</span>
-          <button onClick={() => navigator.clipboard.writeText(url)}>Copy URL</button>
+          <span className="settings-value" style={{ fontFamily: 'var(--font-mono)' }}>{snippetUrl}</span>
+          <button onClick={() => navigator.clipboard.writeText(snippetUrl)}>Copy URL</button>
         </div>
+        <label className="settings-control" style={{ gap: 8, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={pendingExpose}
+            disabled={applying}
+            onChange={(e) => setPendingExpose(e.target.checked)}
+          />
+          <span style={{ fontSize: 12 }}>Expose on LAN (bind on 0.0.0.0)</span>
+        </label>
+        {pendingExpose && (
+          <div
+            style={{
+              border: '1px solid var(--danger)',
+              background: 'rgba(220, 80, 80, 0.08)',
+              color: 'var(--fg-0)',
+              borderRadius: 4,
+              padding: '6px 8px',
+              fontSize: 11.5,
+              lineHeight: 1.4,
+            }}
+          >
+            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> the MCP server has no authentication.
+            Any machine that can reach this host on port {status?.port ?? 53825} can read and write workspace
+            files, run shell commands, and execute agents. Only enable this on a trusted network.
+            {status?.exposedOnLan && !status.lanUrl && (
+              <div style={{ marginTop: 4 }}>
+                No external IPv4 interface detected — clients will need to reach this machine some other way.
+              </div>
+            )}
+          </div>
+        )}
+        {dirty && (
+          <div className="settings-control" style={{ gap: 8 }}>
+            <button
+              onClick={onApply}
+              disabled={applying}
+              style={{ background: 'var(--accent-hi)', color: '#fff', borderColor: 'var(--accent-hi)' }}
+            >
+              {applying ? 'Restarting…' : 'Apply & restart app'}
+            </button>
+            <button onClick={() => setPendingExpose(savedExpose)} disabled={applying}>Cancel</button>
+            <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>Changing the bind address requires a full app restart.</span>
+          </div>
+        )}
         <pre className="mcp-snippet">{cfg}</pre>
         <button onClick={() => navigator.clipboard.writeText(cfg)} style={{ alignSelf: 'flex-start' }}>Copy JSON snippet</button>
         {status?.error && <div className="db-test-error">{status.error}</div>}

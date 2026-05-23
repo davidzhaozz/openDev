@@ -74,7 +74,10 @@ const versionInfo: { version: string } = (() => {
 })();
 
 const api = {
-  app: { version: () => versionInfo.version },
+  app: {
+    version: () => versionInfo.version,
+    relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.AppRelaunch)
+  },
   workspace: {
     current: (): Promise<string | undefined> => ipcRenderer.invoke(IPC.WorkspaceCurrent),
     open: (p: string): Promise<string | undefined> => ipcRenderer.invoke(IPC.WorkspaceOpen, p),
@@ -184,7 +187,8 @@ const api = {
     pickBinary: (): Promise<string | null> => ipcRenderer.invoke(IPC.AiLocalPickBinary)
   },
   mcp: {
-    status: (): Promise<{ running: boolean; url?: string; port?: number; error?: string }> => ipcRenderer.invoke(IPC.McpStatus),
+    status: (): Promise<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string }> => ipcRenderer.invoke(IPC.McpStatus),
+    restart: (): Promise<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string }> => ipcRenderer.invoke(IPC.McpRestart),
     pushEditorSnapshot: (snap: unknown): Promise<boolean> => ipcRenderer.invoke('mcp:editor-snapshot', snap),
     onCommand: (cb: (cmd: { kind: string; path?: string; line?: number; col?: number }) => void) => on('mcp:command', cb)
   },

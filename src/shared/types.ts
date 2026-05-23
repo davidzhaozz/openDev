@@ -205,6 +205,11 @@ export type AppSettings = {
   // memory-constrained users (e.g. about to start MLX training) can flip
   // it off to reclaim ~20-30 MB without losing in-app AI chat.
   mcpEnabled?: boolean;
+  // Bind the MCP server on 0.0.0.0 instead of 127.0.0.1 so other machines
+  // on the LAN can reach it. The server has no authentication, so this
+  // exposes IDE tools (read/write files, run commands, run agents) to
+  // anyone who can route to this host. Default false.
+  mcpExposeOnLan?: boolean;
 
   // Modifier+click chords that trigger LSP navigation in the editor.
   // Values: 'meta' (⌘/Ctrl), 'ctrl' (literal Control on Mac), 'alt' (⌥),

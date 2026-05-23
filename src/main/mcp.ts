@@ -16,6 +16,7 @@
 
 import { ipcMain } from 'electron';
 import http from 'http';
+import os from 'os';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, isAbsolute, resolve } from 'path';
@@ -29,14 +30,37 @@ import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
 import type { RestSavedRequest } from '@shared/types';
+import { loadSettings } from './storage.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
 const PORT = 53825;
-const HOST = '127.0.0.1';
+const HOST_LOOPBACK = '127.0.0.1';
+const HOST_ALL = '0.0.0.0';
 
-let status: { running: boolean; url?: string; port?: number; error?: string } = { running: false };
+type McpStatus = {
+  running: boolean;
+  url?: string;          // loopback URL — always works locally
+  lanUrl?: string;       // LAN-reachable URL when bound on 0.0.0.0
+  port?: number;
+  host?: string;         // actual bind address
+  exposedOnLan?: boolean;
+  error?: string;
+};
+
+let status: McpStatus = { running: false };
 let server: http.Server | null = null;
+let ipcRegistered = false;
+
+function firstLanIPv4(): string | null {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return null;
+}
 
 type ToolDef = {
   name: string;
@@ -419,8 +443,33 @@ async function handleJsonRpc(req: any): Promise<any> {
   return { jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } };
 }
 
+export function registerMcpIpc() {
+  if (ipcRegistered) return;
+  ipcRegistered = true;
+  ipcMain.handle(IPC.McpStatus, () => status);
+  ipcMain.handle(IPC.McpRestart, async () => {
+    await stopIdeMcpServer();
+    const s = await loadSettings();
+    if (s.mcpEnabled === false) return status;
+    await startIdeMcpServer();
+    return status;
+  });
+}
+
+export async function stopIdeMcpServer(): Promise<void> {
+  if (!server) return;
+  const s = server;
+  server = null;
+  await new Promise<void>((res) => s.close(() => res()));
+  status = { running: false };
+}
+
 export async function startIdeMcpServer(): Promise<void> {
+  registerMcpIpc();
   if (server) return;
+  const settings = await loadSettings();
+  const exposeOnLan = settings.mcpExposeOnLan === true;
+  const HOST = exposeOnLan ? HOST_ALL : HOST_LOOPBACK;
   server = http.createServer((req, res) => {
     // CORS so Claude / Codex desktop clients can also hit us if they run web
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -470,12 +519,19 @@ export async function startIdeMcpServer(): Promise<void> {
     });
     server!.listen(PORT, HOST, () => resolveP());
   }).catch((e) => { console.error('[mcp]', e?.message || e); });
-  if (server.listening) {
-    status = { running: true, url: `http://${HOST}:${PORT}/`, port: PORT };
-    console.log(`[mcp] listening on ${status.url}`);
+  if (server && server.listening) {
+    const loopback = `http://${HOST_LOOPBACK}:${PORT}/`;
+    const lanIp = exposeOnLan ? firstLanIPv4() : null;
+    status = {
+      running: true,
+      url: loopback,
+      lanUrl: lanIp ? `http://${lanIp}:${PORT}/` : undefined,
+      port: PORT,
+      host: HOST,
+      exposedOnLan: exposeOnLan,
+    };
+    console.log(`[mcp] listening on ${HOST}:${PORT}${exposeOnLan ? ` (LAN: ${status.lanUrl ?? '<no LAN IP>'})` : ''}`);
   }
-
-  ipcMain.handle(IPC.McpStatus, () => status);
 }
 
 onShutdown(() => {

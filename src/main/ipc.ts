@@ -13,7 +13,7 @@ import { registerDbIpc } from './db.js';
 import { registerGitIpc } from './git.js';
 import { registerTerminalIpc } from './term.js';
 import { registerBrowserIpc } from './browser.js';
-import { startIdeMcpServer } from './mcp.js';
+import { startIdeMcpServer, registerMcpIpc } from './mcp.js';
 import { registerSessionIpc } from './session.js';
 import { registerToolsIpc } from './tools.js';
 import { registerAgentsIpc } from './agents.js';
@@ -52,6 +52,13 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.SettingsGet, () => loadSettings());
   ipcMain.handle(IPC.SettingsSet, (_e, patch) => patchSettings(patch));
+
+  // Full app relaunch — used by settings that need to re-bind sockets or
+  // change main-process startup behavior (e.g. MCP LAN exposure).
+  ipcMain.handle(IPC.AppRelaunch, () => {
+    app.relaunch();
+    app.exit(0);
+  });
 
   // Manual "free unused resources" trigger from the bottom-bar widget.
   // Kills all idle LSP servers (they respawn lazily on next use) and
@@ -100,6 +107,9 @@ export function registerIpc() {
   // Gate the MCP HTTP server on the user's opt-in setting. Default true
   // for backward compat; users who toggle it off in Settings get the
   // ~20-30 MB back next launch.
+  // Register MCP IPC handlers unconditionally so the Settings UI can read
+  // status / trigger a restart even when the server is currently disabled.
+  registerMcpIpc();
   loadSettings().then((s) => {
     if (s.mcpEnabled === false) {
       console.log('[mcp] disabled via settings — not starting HTTP server');

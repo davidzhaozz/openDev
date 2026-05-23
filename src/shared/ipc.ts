@@ -42,6 +42,10 @@ export const IPC = {
 
   // mcp
   McpStatus: 'mcp:status',
+  McpRestart: 'mcp:restart',
+
+  // app lifecycle
+  AppRelaunch: 'app:relaunch',
 
   // browser
   BrowserScreenshotRect: 'browser:screenshot-rect',
