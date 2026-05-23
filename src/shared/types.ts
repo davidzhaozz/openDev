@@ -206,10 +206,13 @@ export type AppSettings = {
   // it off to reclaim ~20-30 MB without losing in-app AI chat.
   mcpEnabled?: boolean;
   // Bind the MCP server on 0.0.0.0 instead of 127.0.0.1 so other machines
-  // on the LAN can reach it. The server has no authentication, so this
-  // exposes IDE tools (read/write files, run commands, run agents) to
-  // anyone who can route to this host. Default false.
+  // on the LAN can reach it. Non-loopback clients must present
+  // `Authorization: Bearer <mcpAccessKey>` to call tools. Default false.
   mcpExposeOnLan?: boolean;
+  // Bearer token for remote MCP clients. Auto-generated on first MCP
+  // start; user can rotate it from Settings → AI. Loopback clients
+  // bypass auth (the local IDE chat needs no token).
+  mcpAccessKey?: string;
 
   // Modifier+click chords that trigger LSP navigation in the editor.
   // Values: 'meta' (⌘/Ctrl), 'ctrl' (literal Control on Mac), 'alt' (⌥),

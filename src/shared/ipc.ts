@@ -43,6 +43,7 @@ export const IPC = {
   // mcp
   McpStatus: 'mcp:status',
   McpRestart: 'mcp:restart',
+  McpRegenerateKey: 'mcp:regenerate-key',
 
   // app lifecycle
   AppRelaunch: 'app:relaunch',

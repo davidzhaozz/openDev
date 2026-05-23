@@ -52,6 +52,17 @@ import type {
   WorktreeInfo
 } from '../shared/types.js';
 
+type McpStatusInfo = {
+  running: boolean;
+  url?: string;
+  lanUrl?: string;
+  port?: number;
+  host?: string;
+  exposedOnLan?: boolean;
+  accessKey?: string;
+  error?: string;
+};
+
 const onMap = new Map<string, Set<(...args: any[]) => void>>();
 function on(channel: string, cb: (...args: any[]) => void): () => void {
   let set = onMap.get(channel);
@@ -187,8 +198,9 @@ const api = {
     pickBinary: (): Promise<string | null> => ipcRenderer.invoke(IPC.AiLocalPickBinary)
   },
   mcp: {
-    status: (): Promise<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string }> => ipcRenderer.invoke(IPC.McpStatus),
-    restart: (): Promise<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string }> => ipcRenderer.invoke(IPC.McpRestart),
+    status: (): Promise<McpStatusInfo> => ipcRenderer.invoke(IPC.McpStatus),
+    restart: (): Promise<McpStatusInfo> => ipcRenderer.invoke(IPC.McpRestart),
+    regenerateKey: (): Promise<McpStatusInfo> => ipcRenderer.invoke(IPC.McpRegenerateKey),
     pushEditorSnapshot: (snap: unknown): Promise<boolean> => ipcRenderer.invoke('mcp:editor-snapshot', snap),
     onCommand: (cb: (cmd: { kind: string; path?: string; line?: number; col?: number }) => void) => on('mcp:command', cb)
   },

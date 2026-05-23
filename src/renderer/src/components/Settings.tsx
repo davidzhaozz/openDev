@@ -610,7 +610,7 @@ export function Settings({ onClose }: Props) {
 }
 
 function McpStatusRow() {
-  const [status, setStatus] = useState<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; error?: string } | null>(null);
+  const [status, setStatus] = useState<{ running: boolean; url?: string; lanUrl?: string; port?: number; host?: string; exposedOnLan?: boolean; accessKey?: string; error?: string } | null>(null);
   // Saved value (last persisted to disk) vs pending (current checkbox state).
   // We don't persist on toggle — the user has to click Apply, which writes
   // the setting and relaunches the app so the MCP server re-binds cleanly.
@@ -630,7 +630,17 @@ function McpStatusRow() {
   // Snippet uses the LAN URL when exposed (that's the whole point — other
   // machines need to reach it), otherwise loopback.
   const snippetUrl = status?.exposedOnLan && status.lanUrl ? status.lanUrl : localUrl;
-  const cfg = JSON.stringify({ mcpServers: { 'opendev-ide': { type: 'http', url: snippetUrl } } }, null, 2);
+  const accessKey = status?.accessKey || '';
+  // LAN clients MUST send the bearer token — include the headers stanza
+  // in the snippet when exposed. Loopback config stays headerless to keep
+  // the common case simple (auth is bypassed for 127.0.0.1).
+  const cfg = JSON.stringify({
+    mcpServers: {
+      'opendev-ide': status?.exposedOnLan
+        ? { type: 'http', url: snippetUrl, headers: { Authorization: `Bearer ${accessKey || '<your-key>'}` } }
+        : { type: 'http', url: snippetUrl }
+    }
+  }, null, 2);
 
   const onApply = async () => {
     setApplying(true);
@@ -641,6 +651,15 @@ function McpStatusRow() {
     } catch {
       setApplying(false);
     }
+  };
+
+  const onRegenerateKey = async () => {
+    const ok = window.confirm(
+      'Generate a new access PIN? Every remote client (Claude / Codex / others) using the current PIN will start getting 401 Unauthorized until you update their config with the new one.'
+    );
+    if (!ok) return;
+    const s = await window.opendev.mcp.regenerateKey();
+    setStatus(s);
   };
 
   return (
@@ -660,6 +679,17 @@ function McpStatusRow() {
           </span>
           <span className="settings-value" style={{ fontFamily: 'var(--font-mono)' }}>{snippetUrl}</span>
           <button onClick={() => navigator.clipboard.writeText(snippetUrl)}>Copy URL</button>
+        </div>
+        <div className="settings-control" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>Access PIN</span>
+          <span
+            className="settings-value"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 14, letterSpacing: 2, userSelect: 'all' }}
+          >
+            {accessKey || '------'}
+          </span>
+          <button onClick={() => navigator.clipboard.writeText(accessKey)} disabled={!accessKey}>Copy</button>
+          <button onClick={onRegenerateKey} disabled={!accessKey}>Regenerate</button>
         </div>
         <label className="settings-control" style={{ gap: 8, cursor: 'pointer' }}>
           <input
@@ -682,9 +712,11 @@ function McpStatusRow() {
               lineHeight: 1.4,
             }}
           >
-            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> the MCP server has no authentication.
-            Any machine that can reach this host on port {status?.port ?? 53825} can read and write workspace
-            files, run shell commands, and execute agents. Only enable this on a trusted network.
+            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> the MCP server will be reachable on
+            port {status?.port ?? 53825} from every machine that can route to this host. Remote clients must
+            present the 6-digit PIN above as <code>Authorization: Bearer …</code>; anyone who has that PIN
+            can read and write workspace files, run shell commands, and execute agents. Keep the PIN private,
+            and only enable LAN exposure on a trusted network.
             {status?.exposedOnLan && !status.lanUrl && (
               <div style={{ marginTop: 4 }}>
                 No external IPv4 interface detected — clients will need to reach this machine some other way.

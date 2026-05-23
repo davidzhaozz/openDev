@@ -17,6 +17,7 @@
 import { ipcMain } from 'electron';
 import http from 'http';
 import os from 'os';
+import { randomBytes } from 'crypto';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, isAbsolute, resolve } from 'path';
@@ -30,7 +31,7 @@ import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
 import type { RestSavedRequest } from '@shared/types';
-import { loadSettings } from './storage.js';
+import { loadSettings, patchSettings } from './storage.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
@@ -45,12 +46,16 @@ type McpStatus = {
   port?: number;
   host?: string;         // actual bind address
   exposedOnLan?: boolean;
+  accessKey?: string;    // bearer token remote clients must present
   error?: string;
 };
 
 let status: McpStatus = { running: false };
 let server: http.Server | null = null;
 let ipcRegistered = false;
+// Mutable so a `regenerate` call takes effect on the running server's
+// next request without needing to recreate the http.Server instance.
+let currentAccessKey: string | null = null;
 
 function firstLanIPv4(): string | null {
   const nets = os.networkInterfaces();
@@ -60,6 +65,32 @@ function firstLanIPv4(): string | null {
     }
   }
   return null;
+}
+
+function generateAccessKey(): string {
+  // 6-digit PIN — easy to read off the screen and type into another
+  // machine's config. Drawn from crypto.randomBytes (not Math.random) so
+  // it's still unguessable; 10^6 = 1M codes is enough given the server
+  // is only reachable on the local network when LAN exposure is on.
+  const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
+  return n.toString().padStart(6, '0');
+}
+
+async function ensureAccessKey(): Promise<string> {
+  const s = await loadSettings();
+  // Only accept keys that match the new 6-digit format; any legacy
+  // longer key gets replaced so the UI and Settings stay consistent.
+  if (s.mcpAccessKey && /^\d{6}$/.test(s.mcpAccessKey)) return s.mcpAccessKey;
+  const fresh = generateAccessKey();
+  await patchSettings({ mcpAccessKey: fresh });
+  return fresh;
+}
+
+function isLoopbackAddress(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  // Node reports IPv4-mapped IPv6 for IPv4 loopback when listening on
+  // a dual-stack socket; cover all three forms.
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr.startsWith('127.');
 }
 
 type ToolDef = {
@@ -446,12 +477,27 @@ async function handleJsonRpc(req: any): Promise<any> {
 export function registerMcpIpc() {
   if (ipcRegistered) return;
   ipcRegistered = true;
-  ipcMain.handle(IPC.McpStatus, () => status);
+  ipcMain.handle(IPC.McpStatus, async () => {
+    // Surface the key even when the server is off so the UI can still
+    // show / copy it. Lazy-generate if it's never existed.
+    if (!status.accessKey) {
+      const s = await loadSettings();
+      status = { ...status, accessKey: s.mcpAccessKey };
+    }
+    return status;
+  });
   ipcMain.handle(IPC.McpRestart, async () => {
     await stopIdeMcpServer();
     const s = await loadSettings();
     if (s.mcpEnabled === false) return status;
     await startIdeMcpServer();
+    return status;
+  });
+  ipcMain.handle(IPC.McpRegenerateKey, async () => {
+    const fresh = generateAccessKey();
+    await patchSettings({ mcpAccessKey: fresh });
+    currentAccessKey = fresh;
+    status = { ...status, accessKey: fresh };
     return status;
   });
 }
@@ -470,6 +516,10 @@ export async function startIdeMcpServer(): Promise<void> {
   const settings = await loadSettings();
   const exposeOnLan = settings.mcpExposeOnLan === true;
   const HOST = exposeOnLan ? HOST_ALL : HOST_LOOPBACK;
+  // Ensure a stable bearer token exists so remote clients have something
+  // to authenticate with. Loopback never sees the gate, but we generate
+  // unconditionally so the Settings UI always has a key to display.
+  currentAccessKey = await ensureAccessKey();
   server = http.createServer((req, res) => {
     // CORS so Claude / Codex desktop clients can also hit us if they run web
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -483,6 +533,21 @@ export async function startIdeMcpServer(): Promise<void> {
       return;
     }
     if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
+    // Bearer-token gate for non-loopback clients. The local IDE always
+    // talks to itself over loopback and never needs to present a key;
+    // any other origin (LAN, tunnel) must match the configured key.
+    const remote = req.socket.remoteAddress || '';
+    if (!isLoopbackAddress(remote)) {
+      const auth = req.headers['authorization'] || '';
+      const expected = currentAccessKey ? `Bearer ${currentAccessKey}` : '';
+      if (!expected || auth !== expected) {
+        res.statusCode = 401;
+        res.setHeader('WWW-Authenticate', 'Bearer realm="opendev-mcp"');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized — set Authorization: Bearer <opendev MCP access key>' } }));
+        return;
+      }
+    }
     let body = '';
     req.setEncoding('utf8');
     req.on('data', (c) => { body += c; if (body.length > 10_000_000) { req.destroy(); } });
@@ -529,6 +594,7 @@ export async function startIdeMcpServer(): Promise<void> {
       port: PORT,
       host: HOST,
       exposedOnLan: exposeOnLan,
+      accessKey: currentAccessKey ?? undefined,
     };
     console.log(`[mcp] listening on ${HOST}:${PORT}${exposeOnLan ? ` (LAN: ${status.lanUrl ?? '<no LAN IP>'})` : ''}`);
   }
