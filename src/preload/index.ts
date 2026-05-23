@@ -18,11 +18,13 @@ import type {
   MlxProjectInfo,
   MlxStatus,
   MlxTrainEvent,
+  MlxServerStatus,
   PipPackage,
   PipRequirement,
   PythonInterpreter,
   PythonRunConfig,
   RunSession,
+  SystemStats,
   RestRequestSpec,
   RestResult,
   RestSavedRequest,
@@ -119,6 +121,14 @@ const api = {
     conversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.AiConversations),
     conversation: (id: string): Promise<Conversation | null> => ipcRenderer.invoke(IPC.AiConversationGet, id),
     deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id)
+  },
+  llm: {
+    mlxStart: (opts: { model: string; adapter?: string | null; port?: number }): Promise<MlxServerStatus> =>
+      ipcRenderer.invoke(IPC.LlmMlxStart, opts),
+    mlxStop: (): Promise<void> => ipcRenderer.invoke(IPC.LlmMlxStop),
+    mlxStatus: (): Promise<MlxServerStatus> => ipcRenderer.invoke(IPC.LlmMlxStatus),
+    onMlxStatus: (cb: (s: MlxServerStatus) => void) => on(IPC.LlmMlxStatusChanged, cb),
+    onMlxLog: (cb: (chunk: string) => void) => on(IPC.LlmMlxLog, cb)
   },
   pip: {
     list: (): Promise<PipPackage[]> => ipcRenderer.invoke(IPC.PipList),
@@ -349,7 +359,10 @@ const api = {
     } | null> => ipcRenderer.invoke(IPC.SessionLoad)
   },
   system: {
-    onMemoryWarning: (cb: (m: { level: 'ok' | 'warn' | 'critical'; rss: number; heapUsed: number; heapTotal: number; message: string }) => void) => on(IPC.MemoryWarning, cb)
+    onMemoryWarning: (cb: (m: { level: 'ok' | 'warn' | 'critical'; rss: number; heapUsed: number; heapTotal: number; message: string }) => void) => on(IPC.MemoryWarning, cb),
+    onStats: (cb: (s: SystemStats) => void) => on(IPC.SystemStats, cb),
+    freeMemory: (): Promise<{ lspsKilled: number; mainRssBefore: number; mainRssAfter: number }> =>
+      ipcRenderer.invoke(IPC.SystemFreeMemory)
   }
 };
 

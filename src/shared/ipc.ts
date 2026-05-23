@@ -179,6 +179,15 @@ export const IPC = {
   RunsStatus: 'runs:status',            // main → renderer (state change)
   RunsChanged: 'runs:changed',          // main → renderer (config list mutated)
 
+  // local LLM models (mlx_lm.server). Ollama support was removed in
+  // v0.6.22 — users who run ollama can point any OpenAI-compat client at
+  // it directly; the IDE focuses on what it can drive end-to-end.
+  LlmMlxStart: 'llm:mlx-start',
+  LlmMlxStop: 'llm:mlx-stop',
+  LlmMlxStatus: 'llm:mlx-status',
+  LlmMlxStatusChanged: 'llm:mlx-status-changed',         // main → renderer
+  LlmMlxLog: 'llm:mlx-log',                              // main → renderer
+
   // pip / python packages
   PipList: 'pip:list',
   PipOutdated: 'pip:outdated',
@@ -208,7 +217,12 @@ export const IPC = {
   MlxEvent: 'mlx:event',                  // main → renderer (parsed training events)
 
   // memory watchdog (main → renderer)
-  MemoryWarning: 'memory:warning'
+  MemoryWarning: 'memory:warning',
+
+  // system stats (main → renderer, broadcast every ~2s)
+  SystemStats: 'system:stats',
+  // explicit memory-reclaim trigger from the UI
+  SystemFreeMemory: 'system:free-memory'
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

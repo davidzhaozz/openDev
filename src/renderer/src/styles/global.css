@@ -80,12 +80,13 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   display: flex;
   align-items: center;
   padding: 0 12px 0 78px;
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: calc(var(--ui-font-size) - 1px);
   color: var(--fg-2);
   gap: 10px;
 }
-.titlebar .title { font-weight: 600; color: var(--fg-1); }
-.titlebar .path { color: var(--fg-2); font-family: var(--font-mono); font-size: 10.5px; }
+.titlebar .title { font-weight: 600; color: var(--fg-1); font-size: var(--ui-font-size); }
+.titlebar .path { color: var(--fg-2); font-family: var(--font-mono); font-size: calc(var(--ui-font-size) - 1.5px); }
 .titlebar .actions { margin-left: auto; -webkit-app-region: no-drag; display: flex; gap: 6px; }
 
 .workspace {
@@ -1112,7 +1113,8 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-size);
   cursor: pointer;
   color: var(--fg-1);
   white-space: nowrap;
@@ -1181,17 +1183,117 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
 }
 .tree-row:hover { background: var(--bg-hover); }
 .tree-row.selected { background: var(--bg-active); color: white; }
-.tree-row .icon {
+.tree-row .tree-chev {
+  display: inline-block;
+  flex: 0 0 12px;
+  width: 12px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 9px;
+  line-height: 1;
+}
+.tree-row .tree-glyph {
   display: inline-block;
   flex: 0 0 14px;
-  width: 14px; text-align: center;
-  color: var(--fg-2);
-  margin-right: 4px;
-  font-family: var(--font-mono);
+  width: 14px;
+  text-align: center;
+  color: var(--fg-3);
+  margin-right: 6px;
   font-size: 11px;
-  font-weight: 700;
+  line-height: 1;
 }
-.tree-row.selected .icon { color: white; }
+.tree-row:hover .tree-chev,
+.tree-row:hover .tree-glyph { color: var(--fg-1); }
+.tree-row.selected .tree-chev,
+.tree-row.selected .tree-glyph { color: rgba(255,255,255,0.85); }
+/* Hidden entries (names starting with ".") render dimmer so dotfiles
+   don't compete visually with real source. Selected state still uses
+   the full-contrast highlight. */
+.tree-row.hidden .tree-name,
+.tree-row.hidden .tree-chev,
+.tree-row.hidden .tree-glyph { color: var(--fg-3); opacity: 0.75; }
+.tree-row.hidden.selected .tree-name,
+.tree-row.hidden.selected .tree-chev,
+.tree-row.hidden.selected .tree-glyph { color: white; opacity: 1; }
+
+/* LSP click highlight — gentle underline + soft tint on the symbol the
+   user modifier-clicked, so it's clear which token the popover/jump is
+   acting on. */
+.cm-lsp-click-highlight {
+  background: rgba(78, 201, 176, 0.18);
+  border-bottom: 1px dashed #4ec9b0;
+  border-radius: 2px;
+}
+
+/* References popover anchored next to a modifier-click. Lightweight
+   alternative to the centered References modal. */
+.lsp-popover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 320px;
+  max-width: 520px;
+  max-height: 360px;
+  background: var(--bg-solid-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-size);
+  color: var(--fg-1);
+}
+.lsp-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-solid-2);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.lsp-popover-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lsp-popover-title code {
+  font-family: var(--font-mono);
+  font-size: calc(var(--ui-font-size) - 0.5px);
+  background: rgba(78, 201, 176, 0.14);
+  color: #9be9c7;
+  padding: 0 5px;
+  border-radius: 3px;
+}
+.lsp-popover-count {
+  flex: 0 0 auto;
+  color: var(--fg-3);
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 500;
+}
+.lsp-popover-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+.lsp-popover-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.lsp-popover-row:hover { background: var(--bg-hover); }
+.lsp-popover-row.empty { color: var(--fg-3); cursor: default; padding: 8px 10px; }
+.lsp-popover-row.empty:hover { background: transparent; }
+.lsp-popover-file { color: var(--fg-0); flex: 0 0 auto; }
+.lsp-popover-loc {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: calc(var(--ui-font-size) - 1.5px);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 .tree-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1203,21 +1305,21 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   flex: 0 0 auto;
   margin-left: 8px;
   max-width: 45%;
-  /* Always solid — git branch chip should be legible regardless of the
+  /* Soft branch badge — always solid so it stays legible regardless of the
      workspace transparency setting. */
-  color: #9be9c7;
+  color: #8fd0b1;
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  background: #1f3d36;
-  padding: 1px 7px;
+  font-size: 10px;
+  background: rgba(78, 201, 176, 0.10);
+  padding: 1px 6px;
   border-radius: 3px;
-  border: 1px solid #2a5a4d;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 500;
+  letter-spacing: 0.1px;
 }
-.tree-row.selected .tree-git { background: #1f3d36; color: #9be9c7; border-color: #4ec9b0; }
+.tree-row.selected .tree-git { background: rgba(255,255,255,0.14); color: #c8f0db; }
 
 .statusbar {
   background: var(--accent);
@@ -4161,4 +4263,315 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   color: var(--fg-1);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── System stats chip (bottom-bar) ──────────────────────────────────── */
+.sys-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+.sys-free-btn {
+  background: transparent;
+  border: none;
+  padding: 0 6px;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+.sys-free-btn:hover { opacity: 1; }
+.sys-stat-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transition: background 0.4s ease, color 0.4s ease;
+}
+.sys-stat-pill.ok { /* default */ }
+.sys-stat-pill.warn { background: rgba(220, 180, 60, 0.18); color: #d6c06a; }
+.sys-stat-pill.critical {
+  background: rgba(217, 107, 107, 0.22);
+  color: #f08a8a;
+  /* Subtle pulse when memory/cpu is in the red — pre-failure cue without
+     being a full attention-stealing alarm. */
+  animation: sys-stat-pulse 1.6s ease-in-out infinite;
+}
+@keyframes sys-stat-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ── Local LLM panel ─────────────────────────────────────────────────── */
+.llm-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+}
+/* The body inside .llm-panel should consume all remaining vertical space
+   after the header, so the log can grow to fill it. Without this rule the
+   shared .panel-body styles leave the section sized only to its content,
+   creating a big empty band at the bottom of a tall right-column. */
+.llm-panel .panel-body { flex: 1; min-height: 0; }
+.llm-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-2);
+  margin-bottom: 6px;
+}
+.llm-section-title .grow { flex: 1; }
+.llm-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-family: var(--font-mono);
+}
+.llm-badge.on { background: rgba(80, 200, 120, 0.18); color: #6ec78a; }
+.llm-badge.off { background: var(--bg-2); color: var(--fg-3); }
+
+.llm-pull-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.llm-pull-input {
+  flex: 1;
+  background: var(--bg-1);
+  color: var(--fg-0);
+  border: 1px solid var(--bg-3, rgba(255,255,255,0.08));
+  border-radius: 3px;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+.llm-pulls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.llm-pull-row-info {
+  background: var(--bg-1, rgba(255,255,255,0.03));
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.llm-pull-row-info.error { background: rgba(217, 107, 107, 0.12); color: #f08a8a; }
+.llm-pull-name { font-family: var(--font-mono); display: flex; gap: 8px; align-items: center; }
+.llm-pull-status { color: var(--fg-3); font-size: 10.5px; }
+.llm-progress-track {
+  height: 3px;
+  margin-top: 3px;
+  background: var(--bg-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.llm-progress-fill {
+  height: 100%;
+  background: var(--accent, #6cb);
+  transition: width 0.2s linear;
+}
+
+.llm-error {
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: rgba(217, 107, 107, 0.12);
+  border: 1px solid rgba(217, 107, 107, 0.3);
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: #f08a8a;
+  font-family: var(--font-mono);
+}
+.llm-hint { color: var(--fg-3); font-family: var(--font-mono); font-size: 11px; }
+.llm-hint code { background: var(--bg-2); padding: 1px 4px; border-radius: 2px; }
+.llm-empty {
+  padding: 16px 10px;
+  color: var(--fg-3);
+  text-align: center;
+  font-size: 11.5px;
+}
+.llm-empty code { background: var(--bg-2); padding: 1px 4px; border-radius: 2px; font-family: var(--font-mono); }
+
+.llm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.llm-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-1, rgba(255,255,255,0.02));
+  border-radius: 4px;
+  font-size: 11.5px;
+  border: 1px solid transparent;
+}
+.llm-row.loaded {
+  border-color: rgba(80, 200, 120, 0.3);
+  background: rgba(80, 200, 120, 0.06);
+}
+.llm-row-main { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.llm-name {
+  font-family: var(--font-mono);
+  color: var(--fg-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llm-tag {
+  font-size: 9.5px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  padding: 1px 5px;
+  border-radius: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.llm-row-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.llm-loaded-badge {
+  background: rgba(80, 200, 120, 0.22);
+  color: #6ec78a;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+.llm-row-actions { display: flex; gap: 4px; }
+.llm-row-actions button { font-size: 10.5px; padding: 2px 8px; }
+
+.llm-mlx-fields {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+}
+.llm-mlx-fields input,
+.llm-mlx-fields select {
+  background: var(--bg-1);
+  color: var(--fg-0);
+  border: 1px solid var(--bg-3, rgba(255,255,255,0.08));
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  min-width: 0;
+  width: 100%;
+}
+.llm-mlx-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.llm-mlx-endpoint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  background: var(--bg-2);
+  padding: 1px 6px;
+  border-radius: 9px;
+}
+/* Body for the MLX section uses flex-column so the log can grow to fill
+   the remaining vertical space instead of leaving a blank gap at the
+   bottom of a tall LLM panel. min-height:0 is the magic that lets the
+   pre inside actually shrink/grow within the flex parent. */
+.llm-mlx-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px;
+  gap: 6px;
+  overflow: hidden;
+}
+.llm-mlx-log {
+  margin: 8px 0 0 0;
+  padding: 6px 8px;
+  flex: 1;
+  min-height: 100px;
+  overflow: auto;
+  background: var(--bg-0);
+  border: 1px solid var(--bg-2);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.llm-mlx-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  background: var(--bg-1, rgba(255,255,255,0.03));
+  border: 1px solid var(--bg-2);
+}
+.llm-mlx-banner.phase-loading { color: #d6c06a; }
+.llm-mlx-banner.phase-ready { color: #6ec78a; border-color: rgba(80, 200, 120, 0.3); }
+.llm-mlx-banner.phase-failed { color: #f08a8a; border-color: rgba(217, 107, 107, 0.3); }
+.llm-mlx-phase { font-weight: 600; }
+.llm-mlx-stats { color: var(--fg-3); font-weight: 400; }
+.llm-mlx-test {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--bg-1, rgba(255,255,255,0.03));
+  border: 1px solid var(--bg-2);
+  font-size: 11.5px;
+}
+.llm-mlx-test.ok { border-color: rgba(80, 200, 120, 0.3); }
+.llm-mlx-test.err { border-color: rgba(217, 107, 107, 0.3); }
+.llm-mlx-test-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  color: var(--fg-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.llm-mlx-test-head .grow { flex: 1; }
+.llm-mlx-test-head button {
+  background: transparent;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 11px;
+}
+.llm-mlx-test-head button:hover { color: var(--fg-0); }
+.llm-mlx-test-ms { color: var(--fg-3); font-family: var(--font-mono); font-size: 10.5px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.llm-mlx-test-body {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  color: var(--fg-0);
 }

@@ -41,7 +41,20 @@ const EDITOR_FONT_PRESETS: Array<{ name: string; value: string }> = [
   { name: 'Courier New',       value: `'Courier New', Courier, monospace` }
 ];
 
-type SettingsTab = 'appearance' | 'ai' | 'local-ai';
+type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai';
+
+// Modifier-click chords for editor LSP navigation. Stored as a string in
+// AppSettings so a future "Cmd+Option" kind of combo could be added
+// without a migration. The mouse-click itself is implicit.
+const CHORD_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'meta',        label: '⌘ + click  (Cmd / Ctrl)' },
+  { value: 'meta+shift',  label: '⌘ ⇧ + click  (Cmd-Shift)' },
+  { value: 'meta+alt',    label: '⌘ ⌥ + click  (Cmd-Option)' },
+  { value: 'alt',         label: '⌥ + click  (Option)' },
+  { value: 'alt+shift',   label: '⌥ ⇧ + click  (Option-Shift)' },
+  { value: 'ctrl',        label: '⌃ + click  (literal Control)' },
+  { value: 'ctrl+shift',  label: '⌃ ⇧ + click  (Control-Shift)' }
+];
 
 export function Settings({ onClose }: Props) {
   const [tab, setTab] = useState<SettingsTab>('appearance');
@@ -58,6 +71,11 @@ export function Settings({ onClose }: Props) {
   const [anthropicModel, setAnthropicModel] = useState('claude-sonnet-4-6');
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
   const [themeId, setThemeId] = useState('vscode-dark');
+
+  // Editor click chords for LSP navigation. Defaults: references on plain
+  // ⌘+click (the more common workflow), definition on ⌘+Shift+click.
+  const [gotoDefChord, setGotoDefChord] = useState('meta+shift');
+  const [findRefChord, setFindRefChord] = useState('meta');
 
   // Local AI (OpenCode) — toggle, binary, backend.
   const [aiLocalEnabled, setAiLocalEnabled] = useState(false);
@@ -84,6 +102,8 @@ export function Settings({ onClose }: Props) {
       if (s.anthropicModel) setAnthropicModel(s.anthropicModel);
       if (s.openaiModel) setOpenaiModel(s.openaiModel);
       if (s.themeId) setThemeId(s.themeId);
+      if (s.editorGotoDefChord) setGotoDefChord(s.editorGotoDefChord);
+      if (s.editorFindRefChord) setFindRefChord(s.editorFindRefChord);
       if (s.aiLocalEnabled) setAiLocalEnabled(true);
       if (s.aiLocalBinPath) setAiLocalBin(s.aiLocalBinPath);
       if (s.aiLocalBaseUrl) setAiLocalBaseUrl(s.aiLocalBaseUrl);
@@ -279,6 +299,7 @@ export function Settings({ onClose }: Props) {
         <div className="settings-tabs">
           {([
             ['appearance', 'Appearance'],
+            ['editor', 'Editor'],
             ['ai', 'AI'],
             ['local-ai', 'Local AI']
           ] as Array<[SettingsTab, string]>).map(([k, label]) => (
@@ -356,6 +377,42 @@ export function Settings({ onClose }: Props) {
             onChange={onEditorFont}
             listId="editor-font-list"
           />
+          </>}
+
+          {tab === 'editor' && <>
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Go to Definition (click chord)</div>
+              <div className="settings-sub">Hold this modifier and click a symbol in the editor to jump to its definition.</div>
+            </div>
+            <div className="settings-row-control">
+              <select value={gotoDefChord}
+                onChange={(e) => { setGotoDefChord(e.target.value); persist({ editorGotoDefChord: e.target.value }); }}>
+                {CHORD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Find References (click chord)</div>
+              <div className="settings-sub">Hold this modifier and click a symbol to open the References panel with every usage.</div>
+            </div>
+            <div className="settings-row-control">
+              <select value={findRefChord}
+                onChange={(e) => { setFindRefChord(e.target.value); persist({ editorFindRefChord: e.target.value }); }}>
+                {CHORD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Note</div>
+              <div className="settings-sub">If the chord matches the same modifier set as Go to Definition, the click goes to definition; the References chord must add or change at least one modifier.</div>
+            </div>
+            <div className="settings-row-control" />
+          </div>
           </>}
 
           {tab === 'ai' && <>

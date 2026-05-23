@@ -1,9 +1,14 @@
 {
   "name": "opendev-ide",
-  "version": "0.6.21",
+  "version": "0.7.3",
   "description": "AI-first JavaScript / TypeScript / Java / C# IDE with embedded browser, SQL client, and Claude integration.",
   "main": "out/main/index.js",
-  "author": "David Zhao",
+  "author": {
+    "name": "David Zhao",
+    "email": "david@situfamily.com",
+    "url": "https://davidzhao.net"
+  },
+  "homepage": "https://davidzhao.net",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -43,10 +48,13 @@
     "openai": "^6.37.0",
     "pg": "^8.13.1",
     "prettier": "^3.3.3",
+    "pyright": "^1.1.409",
     "react": "^18.3.1",
     "react-arborist": "^3.4.0",
     "react-dom": "^18.3.1",
     "simple-git": "^3.27.0",
+    "typescript": "^5.6.3",
+    "typescript-language-server": "^4.3.3",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",
     "ws": "^8.18.0",
@@ -64,9 +72,6 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
-    "pyright": "^1.1.409",
-    "typescript": "^5.6.3",
-    "typescript-language-server": "^4.3.3",
     "vite": "^5.4.11"
   }
 }

@@ -199,6 +199,19 @@ export type AppSettings = {
   // chat composer dropdown. Restored when a fresh chat tab opens so we
   // don't keep snapping back to Claude after each session restart.
   lastAiTransport?: 'claude-cli' | 'codex-cli' | 'opencode-cli';
+
+  // MCP HTTP server (127.0.0.1:53825) that lets an external Claude/Codex
+  // CLI introspect IDE state. Default on for the standard workflow;
+  // memory-constrained users (e.g. about to start MLX training) can flip
+  // it off to reclaim ~20-30 MB without losing in-app AI chat.
+  mcpEnabled?: boolean;
+
+  // Modifier+click chords that trigger LSP navigation in the editor.
+  // Values: 'meta' (⌘/Ctrl), 'ctrl' (literal Control on Mac), 'alt' (⌥),
+  // 'meta+shift', 'ctrl+shift', 'alt+shift'. The mouse-click itself is
+  // implicit. Defaults: gotoDef = meta, findRef = meta+shift.
+  editorGotoDefChord?: string;
+  editorFindRefChord?: string;
 };
 
 // ── AI Agents ──────────────────────────────────────────────────────────
@@ -439,6 +452,47 @@ export type RestResponse = {
 };
 
 export type RestResult = RestResponse | { error: string };
+
+// ---------------------------------------------------------------------------
+// System stats (whole-machine memory + CPU, broadcast every ~2s)
+// ---------------------------------------------------------------------------
+
+export type SystemStats = {
+  // Whole-system memory in bytes. On macOS, `used` is wired + active +
+  // compressed (matches Activity Monitor); on other platforms it's total - free.
+  memUsedBytes: number;
+  memTotalBytes: number;
+  // 0..100 — average across all logical cores in the last sample window.
+  cpuPct: number;
+  // 3-tuple: 1-min, 5-min, 15-min load average.
+  loadAvg: [number, number, number];
+  // Main-process file-descriptor count and the soft RLIMIT_NOFILE under
+  // which the app is running. Lets the bottom-bar warn before fd
+  // exhaustion bites (the IDE has been bitten by this before via chokidar
+  // watching too many files on Finder-launched builds, capped at 256).
+  fdCount: number;
+  fdLimit: number;
+  // GPU info probed once at startup (system_profiler on macOS). 0/0 when
+  // unknown (non-Mac, probe failed, or chip doesn't expose core count).
+  gpuCount: number;
+  gpuCores: number;
+};
+
+// ---------------------------------------------------------------------------
+// Local LLM models (mlx_lm.server only — Ollama support removed in v0.6.22)
+// ---------------------------------------------------------------------------
+
+export type MlxServerStatus = {
+  running: boolean;
+  pid?: number;
+  port?: number;
+  // The model id and adapter path the running server was started with —
+  // null when no server has been started yet (or the last run was cleared).
+  model?: string | null;
+  adapter?: string | null;
+  startedAt?: number;
+  lastError?: string;
+};
 
 // ---------------------------------------------------------------------------
 // Pip / Python packages

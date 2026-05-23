@@ -116,10 +116,14 @@ export function FileTree({ root, onOpen }: Props) {
         const isExpandedDir = node.isDir && expanded.has(node.path);
         const gitLabel = node.isDir && node.gitInfo?.branch ? node.gitInfo.branch : null;
         const isSelected = selected.has(node.path);
+        // Dotfiles/dotdirs (.env, .gitignore, .idea, .vscode, etc.) are
+        // "hidden" by Unix convention. We still show them, but dimmed so
+        // the eye lands on real source first.
+        const isHidden = node.name.startsWith('.');
         return (
           <div
             key={node.path}
-            className={`tree-row ${isSelected ? 'selected' : ''}`}
+            className={`tree-row ${isSelected ? 'selected' : ''} ${isHidden ? 'hidden' : ''}`}
             style={{ paddingLeft: 6 + depth * 12 }}
             onClick={(e) => {
               if (e.shiftKey && anchor) {
@@ -162,7 +166,8 @@ export function FileTree({ root, onOpen }: Props) {
               setCtx({ x: e.clientX, y: e.clientY, node });
             }}
           >
-            <span className="icon">{node.isDir ? (isExpandedDir ? '−' : '+') : ' '}</span>
+            <span className="tree-chev">{node.isDir ? (isExpandedDir ? '▾' : '▸') : ''}</span>
+            <span className="tree-glyph">{node.isDir ? (isExpandedDir ? '▣' : '▢') : '·'}</span>
             <span className="tree-name">{node.name}</span>
             {gitLabel && <span className="tree-git">{gitLabel}</span>}
           </div>

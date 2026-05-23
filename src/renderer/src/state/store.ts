@@ -37,7 +37,7 @@ export type CenterTab =
   | { kind: 'pip'; id: string; name: string };
 
 export type BottomTabKey = 'log' | 'debug' | 'run';
-export type RightTabKey = 'ai' | 'db' | 'es' | 'rest' | 'ml';
+export type RightTabKey = 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm';
 
 export function emptyRestSpec(): RestRequestSpec {
   return {
@@ -158,7 +158,14 @@ type Store = {
   pendingJump?: { path: string; line: number; col: number; nonce: number };
   setPendingJump: (j: { path: string; line: number; col: number } | undefined) => void;
 
-  references?: { symbol?: string; items: Array<{ path: string; line: number; col: number; preview?: string }> };
+  references?: {
+    symbol?: string;
+    items: Array<{ path: string; line: number; col: number; preview?: string }>;
+    // Viewport-relative coords of the click that produced this list.
+    // When set, the renderer pops a small popover next to the mouse
+    // instead of opening the centered modal.
+    anchor?: { x: number; y: number };
+  };
   setReferences: (r: Store['references']) => void;
 
   esText: string;
@@ -199,13 +206,34 @@ type Store = {
   removeDebugWatch: (i: number) => void;
 };
 
-const LAYOUT_KEY = 'opendev:layout:v1';
+// Layout key is versioned so we can ship better defaults without
+// stomping a user's hand-dragged values. When the version bumps we drop
+// the previous saved snapshot one time and start fresh — anybody who has
+// already moved a divider will re-tune from there; everybody else picks
+// up the new defaults automatically. v2 (2026-05): widened right column
+// from 320 → 400 so the LLM/ML/REST panels show their content without
+// requiring a manual drag.
+const LAYOUT_KEY = 'opendev:layout:v2';
+const LEGACY_LAYOUT_KEYS = ['opendev:layout:v1'];
+const DEFAULT_LAYOUT: Store['layout'] = {
+  leftW: 260,
+  rightW: 400,
+  bottomH: 260,
+  servicesH: 260,
+  sqlSplit: 240,
+  agentsH: 240,
+  restSplit: 280
+};
 function readLayout(): Store['layout'] {
   try {
     const s = localStorage.getItem(LAYOUT_KEY);
-    if (s) return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, restSplit: 280, ...JSON.parse(s) };
+    if (s) return { ...DEFAULT_LAYOUT, ...JSON.parse(s) };
+    // One-time cleanup of stale keys when migrating to a new layout version.
+    for (const k of LEGACY_LAYOUT_KEYS) {
+      try { localStorage.removeItem(k); } catch {}
+    }
   } catch {}
-  return { leftW: 260, rightW: 320, bottomH: 220, servicesH: 240, sqlSplit: 240, agentsH: 220, restSplit: 280 };
+  return { ...DEFAULT_LAYOUT };
 }
 function writeLayout(l: Store['layout']) {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)); } catch {}

@@ -218,6 +218,10 @@ app.whenReady().then(async () => {
   registerIpc();
   createWindow();
   startMemoryWatchdog();
+  // Whole-system memory + CPU stats — separate broadcast (~2s cadence)
+  // feeding the bottom-bar chip so the user can see if the *machine* is
+  // about to swap, independent of the IDE's own RSS.
+  import('./systemStats.js').then((m) => m.startSystemStatsBroadcaster()).catch(() => {});
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

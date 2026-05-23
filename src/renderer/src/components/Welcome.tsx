@@ -36,7 +36,7 @@ export function Welcome({ onOpen, onPick }: Props) {
         </div>
 
         <div className="welcome-actions">
-          <button className="primary" onClick={() => onPick()}>Open Folder…</button>
+          <button className="primary" onClick={() => onPick()}>Open Project…</button>
           <button onClick={async () => {
             // Folder picker first, then the form modal — matches the user's
             // mental model of "where do I want this saved?" being the first

@@ -85,6 +85,13 @@ export function RunBar({ activeFilePath }: { activeFilePath?: string }) {
   const openEditor = (id?: string) => { setEditingId(id); setEditorOpen(true); };
 
   const isPyFile = !!activeFilePath && /\.pyi?$/i.test(activeFilePath);
+  // Hide the bar entirely when it has nothing to offer — non-Python file
+  // open, no saved configs, and no run currently active. Without this the
+  // "(no run configs)" placeholder shows above every editor tab (AI chat,
+  // browser, DB workspace, etc.) which is just noise. Once the user adds a
+  // config, the bar becomes globally visible so they can run from any tab.
+  const irrelevant = !isPyFile && configs.length === 0 && !running;
+  if (irrelevant) return null;
 
   return (
     <div className="run-bar">

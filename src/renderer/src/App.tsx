@@ -26,6 +26,7 @@ import { EsWorkspace } from './panels/EsWorkspace';
 import { RestWorkspace } from './panels/RestWorkspace';
 import { RestRequestsPanel } from './panels/RestRequestsPanel';
 import { MlxPanel } from './panels/MlxPanel';
+import { LlmPanel } from './panels/LlmPanel';
 import { PipPanel } from './panels/PipPanel';
 import { PythonPicker } from './components/PythonPicker';
 import { RunBar } from './components/RunBar';
@@ -176,9 +177,9 @@ export default function App() {
       // Validate the restored tab against the current set; fall back to
       // 'ai' if the saved value is from a previous layout. (LOG/DEBUG used
       // to live here too — those sessions now restore as 'ai'.)
-      const validTabs = ['ai', 'db', 'es', 'rest', 'ml'] as const;
+      const validTabs = ['ai', 'db', 'es', 'rest', 'ml', 'llm'] as const;
       const restoredTab = validTabs.includes(s.rightTab as any) ? s.rightTab : 'ai';
-      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest' | 'ml');
+      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm');
       if (s.sqlConnId) useStore.getState().setSqlConnId(s.sqlConnId);
       if (s.sqlText) useStore.getState().setSqlText(s.sqlText);
       if (s.esText) useStore.getState().setEsText(s.esText);
@@ -328,14 +329,14 @@ export default function App() {
 
   // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
   useEffect(() => {
-    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number; tab?: 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'log' | 'debug'; savedId?: string; send?: boolean }) => {
+    const handler = (cmd: { kind: string; path?: string; line?: number; col?: number; tab?: 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm' | 'log' | 'debug'; savedId?: string; send?: boolean }) => {
       if (cmd?.kind === 'open-file' && cmd.path) {
         openFileFromPath(cmd.path).then(() => {
           if (cmd.line != null) setPendingJump({ path: cmd.path!, line: cmd.line, col: cmd.col ?? 0 });
         });
       } else if (cmd?.kind === 'set-right-tab' && cmd.tab) {
-        const t = cmd.tab as 'ai' | 'db' | 'es' | 'rest' | 'ml';
-        if (['ai', 'db', 'es', 'rest', 'ml'].includes(t)) setRightTab(t);
+        const t = cmd.tab as 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm';
+        if (['ai', 'db', 'es', 'rest', 'ml', 'llm'].includes(t)) setRightTab(t);
       } else if (cmd?.kind === 'set-bottom-tab' && cmd.tab) {
         const t = cmd.tab as 'log' | 'debug';
         if (['log', 'debug'].includes(t)) {
@@ -658,28 +659,48 @@ export default function App() {
               ['db', 'DB'],
               ['es', 'ES'],
               ['rest', 'REST'],
+              ['llm', 'LLM'],
               ...(mlxDetected ? [['ml', 'ML'] as const] : [])
             ] as const).map(([k, label]) => (
               <div key={k}
                 className={`right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest' | 'ml')}>{label}</div>
+                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm')}>{label}</div>
             ))}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'ai' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <ConversationsList />
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'db' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <DbConnectionsPanel drivers={['mysql', 'postgres']} title="SQL Connections" />
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'es' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <DbConnectionsPanel drivers={['elasticsearch']} title="ES / OpenSearch" />
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: rightTab === 'rest' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <RestRequestsPanel />
-            </div>
-            {mlxDetected && (
-              <div style={{ flex: 1, minHeight: 0, display: rightTab === 'ml' ? 'flex' : 'none', flexDirection: 'column' }}>
+            {/* Lazy-mount right-panel children — only the active tab is in
+                the DOM. Inactive panels unmount, dropping their IPC
+                subscriptions and React state. Trade-off: switching away
+                from LLM/ML loses the in-panel log buffer (server-side
+                state persists; the next mount just starts a fresh tail).
+                Worth it on a memory-constrained MLX workstation. */}
+            {rightTab === 'ai' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <ConversationsList />
+              </div>
+            )}
+            {rightTab === 'db' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <DbConnectionsPanel drivers={['mysql', 'postgres']} title="SQL Connections" />
+              </div>
+            )}
+            {rightTab === 'es' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <DbConnectionsPanel drivers={['elasticsearch']} title="ES / OpenSearch" />
+              </div>
+            )}
+            {rightTab === 'rest' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <RestRequestsPanel />
+              </div>
+            )}
+            {rightTab === 'llm' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <LlmPanel />
+              </div>
+            )}
+            {mlxDetected && rightTab === 'ml' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <MlxPanel />
               </div>
             )}
@@ -738,11 +759,18 @@ export default function App() {
         <InstallNodePrompt hasBrew={installPrompt.hasBrew} onDismiss={() => setInstallPrompt(null)} />
       )}
 
-      {references && (
+      {references && references.anchor && (
+        <ReferencesPopover
+          data={references}
+          onJump={(r) => { jumpTo(r.path, r.line, r.col); setReferences(undefined); }}
+          onClose={() => setReferences(undefined)}
+        />
+      )}
+      {references && !references.anchor && (
         <div className="modal-overlay" onMouseDown={() => setReferences(undefined)}>
           <div className="modal" style={{ width: 720 }} onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-input" style={{ fontWeight: 600 }}>
-              References ({references.items.length})
+              References{references.symbol ? ` to ${references.symbol}` : ''} ({references.items.length})
             </div>
             <div className="modal-list">
               {references.items.map((r, i) => {
@@ -857,6 +885,71 @@ function DebugToolbar({ active }: { active: ReturnType<typeof useStore.getState>
           <button className="dbg-btn link" onClick={openDebug}>open DEBUG panel →</button>
         </>
       )}
+    </div>
+  );
+}
+
+// Small popover anchored next to a modifier-click. The viewport-edge
+// adjustment keeps it on-screen when the click is near the right or
+// bottom; scroll inside the list itself rather than letting the popover
+// grow off-screen.
+function ReferencesPopover({
+  data, onJump, onClose
+}: {
+  data: { symbol?: string; items: Array<{ path: string; line: number; col: number }>; anchor?: { x: number; y: number } };
+  onJump: (r: { path: string; line: number; col: number }) => void;
+  onClose: () => void;
+}) {
+  const anchor = data.anchor!;
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x + 12, top: anchor.y + 12 });
+
+  // Dismiss on outside click or Escape.
+  useEffect(() => {
+    const onDown = (ev: MouseEvent) => {
+      if (ref.current && !ref.current.contains(ev.target as Node)) onClose();
+    };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') onClose(); };
+    // mousedown — defer one tick so the click that opened this popover
+    // doesn't immediately close it.
+    const t = setTimeout(() => window.addEventListener('mousedown', onDown), 0);
+    window.addEventListener('keydown', onKey);
+    return () => { clearTimeout(t); window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+
+  // After first paint we know the popover's real size — nudge it inward
+  // if it overflows the viewport's right or bottom edge.
+  useEffect(() => {
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    const pad = 8;
+    let left = anchor.x + 12;
+    let top = anchor.y + 12;
+    if (left + r.width > window.innerWidth - pad)  left = Math.max(pad, window.innerWidth - r.width - pad);
+    if (top  + r.height > window.innerHeight - pad) top  = Math.max(pad, anchor.y - r.height - 12);
+    setPos({ left, top });
+  }, [anchor.x, anchor.y]);
+
+  return (
+    <div className="lsp-popover" ref={ref} style={{ left: pos.left, top: pos.top }} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="lsp-popover-header">
+        <span className="lsp-popover-title">References{data.symbol ? <> to <code>{data.symbol}</code></> : null}</span>
+        <span className="lsp-popover-count">{data.items.length}</span>
+      </div>
+      <div className="lsp-popover-list">
+        {data.items.map((r, i) => {
+          const file = r.path.split('/').pop();
+          return (
+            <div key={i} className="lsp-popover-row" onClick={() => onJump(r)}>
+              <span className="lsp-popover-file">{file}</span>
+              <span className="lsp-popover-loc">L{r.line + 1}:{r.col + 1}</span>
+            </div>
+          );
+        })}
+        {data.items.length === 0 && (
+          <div className="lsp-popover-row empty">No references found.</div>
+        )}
+      </div>
     </div>
   );
 }

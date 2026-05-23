@@ -444,12 +444,15 @@ function DbProfileEditor({ p, onClose, onSaved, allowedDrivers }: { p: DbConnect
     // to keep the modal stuck open.
     const snapshot = { ...draft };
     closeEditor();
-    onSaved();
     // Fire-and-forget. Errors become toasts; success becomes a toast.
+    // onSaved() (which refreshes the list) is called only after the save
+    // actually lands on disk — otherwise the refresh races the write and
+    // a newly-added connection won't appear until the user hits ↻.
     (async () => {
       try {
         const result = await window.opendev.db.save(snapshot);
         console.log('[DbProfileEditor.save] success', result);
+        onSaved();
         showToast(`Saved "${snapshot.name}"`, 2000);
       } catch (e: any) {
         const msg = `Save failed for "${snapshot.name}": ${e?.message || e}`;

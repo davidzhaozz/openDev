@@ -24,9 +24,35 @@ type Server = {
   conn: MessageConnection;
   root: string;
   ready: Promise<void>;
+  // Wall-clock time of the most recent request/notify on this server.
+  // Used by the idle reaper to kill servers nobody's touched in a while —
+  // they hold ~150-300 MB each and can be respawned lazily on next use.
+  lastUsedAt: number;
 };
 
 const servers = new Map<ServerKind, Server>();
+
+// Reap LSP servers that haven't been touched in this long. 5 minutes is
+// long enough that ordinary task-switching (read email, check a chat,
+// answer a Slack ping) doesn't kill the server out from under you, but
+// short enough that leaving the IDE idle overnight reclaims the memory.
+const IDLE_KILL_MS = 5 * 60 * 1000;
+const REAP_INTERVAL_MS = 60 * 1000;
+let reapTimer: NodeJS.Timeout | null = null;
+
+function startIdleReaper(): void {
+  if (reapTimer) return;
+  reapTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [kind, s] of servers) {
+      if (now - s.lastUsedAt < IDLE_KILL_MS) continue;
+      console.log(`[lsp:${kind}] idle ${Math.round((now - s.lastUsedAt) / 1000)}s — shutting down to free memory`);
+      try { s.proc.kill(); } catch {}
+      servers.delete(kind);
+    }
+  }, REAP_INTERVAL_MS);
+  if (typeof reapTimer.unref === 'function') reapTimer.unref();
+}
 
 // Tiny inference of which language server should handle a given LSP request.
 // LSP requests carry a textDocument URI; we pick the server by file extension.
@@ -217,9 +243,14 @@ async function ensureServer(kind: ServerKind): Promise<Server | null> {
   const ready = conn.sendRequest('initialize', params)
     .then(() => conn.sendNotification('initialized', {}));
 
-  const server: Server = { kind, proc, conn, root, ready: ready as Promise<void> };
+  const server: Server = { kind, proc, conn, root, ready: ready as Promise<void>, lastUsedAt: Date.now() };
   servers.set(kind, server);
+  startIdleReaper();
   return server;
+}
+
+function touch(s: Server | null): void {
+  if (s) s.lastUsedAt = Date.now();
 }
 
 // Kill + lazy-respawn the Pyright server. Called when the user picks a new
@@ -233,11 +264,25 @@ export function restartPyright(): void {
   // Re-init lazily on next request — no need to eagerly respawn.
 }
 
+// Manual "free memory" entry point — wipes both LSP servers immediately
+// without waiting for the idle reaper. Returns how many were killed so
+// the UI can give a meaningful toast.
+export function killAllLspServers(): number {
+  let count = 0;
+  for (const [kind, s] of servers) {
+    try { s.proc.kill(); count++; }
+    catch (e) { console.warn(`[lsp:${kind}] kill failed`, (e as Error).message); }
+  }
+  servers.clear();
+  return count;
+}
+
 export function registerLspIpc() {
   ipcMain.handle(IPC.LspRequest, async (_e, method: string, params: unknown) => {
     const kind = serverKindForRequestParams(params);
     const s = await ensureServer(kind);
     if (!s) return null;
+    touch(s);
     await s.ready;
     try {
       return await s.conn.sendRequest(method, params);
@@ -251,6 +296,7 @@ export function registerLspIpc() {
     const kind = serverKindForRequestParams(params);
     const s = await ensureServer(kind);
     if (!s) return false;
+    touch(s);
     await s.ready;
     s.conn.sendNotification(method, params);
     return true;

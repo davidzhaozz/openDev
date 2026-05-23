@@ -191,4 +191,4 @@ PRs and issues welcome. Especially welcome: bug reports with a workspace shape t
 
 ## License
 
-[MIT](LICENSE) © David Zhao
+[MIT](LICENSE) © David Zhao &lt;david@situfamily.com&gt; · [davidzhao.net](https://davidzhao.net)

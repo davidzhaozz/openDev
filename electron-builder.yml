@@ -7,7 +7,14 @@ directories:
 files:
   - out/**/*
   - package.json
+  # The main bundle gets everything via Rollup, so node_modules is excluded
+  # by default to keep the DMG small. The LSP servers are the exception:
+  # they spawn as separate processes and must exist as real files on disk
+  # (can't run JS from inside the asar bundle).
   - "!node_modules/**/*"
+  - "node_modules/typescript-language-server/**/*"
+  - "node_modules/typescript/**/*"
+  - "node_modules/pyright/**/*"
 asarUnpack:
   - "**/*.node"
   # The TS language server is JS, but it has to be reachable as a file on

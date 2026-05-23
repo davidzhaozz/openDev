@@ -185,6 +185,26 @@ function makeBreakpointGutter(path: string) {
   });
 }
 
+// The symbol the user just modifier-clicked. Held as a {from, to} range
+// so the highlight survives subsequent doc changes (the StateField maps
+// the range through tr.changes on each update). Cleared on the next
+// click that isn't a chord, or when the references popover closes.
+const setClickHighlightEffect = StateEffect.define<{ from: number; to: number } | null>();
+const clickHighlightDeco = Decoration.mark({ class: 'cm-lsp-click-highlight' });
+const clickHighlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(v, tr) {
+    for (const ef of tr.effects) {
+      if (ef.is(setClickHighlightEffect)) {
+        if (!ef.value) return Decoration.none;
+        return RangeSet.of([clickHighlightDeco.range(ef.value.from, ef.value.to)]);
+      }
+    }
+    return v.map(tr.changes);
+  },
+  provide: (f) => EditorView.decorations.from(f)
+});
+
 // The line where the debugger is currently paused. Cleared when execution
 // resumes or the file shown is different from the paused frame's file.
 const setPausedLineEffect = StateEffect.define<number | null>();
@@ -236,14 +256,62 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
   const pendingJump = useStore(s => s.pendingJump);
   const setPendingJump = useStore(s => s.setPendingJump);
   const setReferences = useStore(s => s.setReferences);
+  const referencesActive = useStore(s => !!s.references);
+  // Clear the click highlight whenever the references popover closes —
+  // keeps the underline tied to whatever symbol the user is investigating
+  // RIGHT NOW, not to whatever the last click was.
+  useEffect(() => {
+    if (referencesActive) return;
+    const v = viewRef.current;
+    if (v) v.dispatch({ effects: setClickHighlightEffect.of(null) });
+  }, [referencesActive]);
+
+  // Click chords for LSP navigation. Loaded from settings on mount and
+  // refreshed when the user changes them in Settings → Editor. Refs so the
+  // CodeMirror domEventHandlers (captured into editor state) always see
+  // the latest values without re-creating the editor.
+  // New defaults: ⌘+click = references (the more common "where is this
+  // used?" question), ⌘+Shift+click = go to definition. The user can
+  // still flip them back from Settings → Editor.
+  const gotoDefChordRef = useRef<string>('meta+shift');
+  const findRefChordRef = useRef<string>('meta');
+  useEffect(() => {
+    const load = () => window.opendev.settings.get().then(s => {
+      gotoDefChordRef.current = s.editorGotoDefChord || 'meta+shift';
+      findRefChordRef.current = s.editorFindRefChord || 'meta';
+    });
+    load();
+    const onChange = () => load();
+    window.addEventListener('opendev:settings-changed', onChange);
+    return () => window.removeEventListener('opendev:settings-changed', onChange);
+  }, []);
 
   const fileUri = `file://${path}`;
   const langId = languageIdFor(path);
+
+  // Compare the click's modifier state against a stored chord like "meta",
+  // "meta+shift", "alt", etc. Returns true only when every required mod is
+  // held AND no extra mods are present — otherwise "meta+shift" would also
+  // match a plain "meta" click.
+  const chordMatches = (e: MouseEvent, chord: string): boolean => {
+    const parts = new Set(chord.split('+'));
+    return (parts.has('meta') === !!e.metaKey)
+      && (parts.has('ctrl') === !!e.ctrlKey)
+      && (parts.has('alt')  === !!e.altKey)
+      && (parts.has('shift') === !!e.shiftKey);
+  };
 
   const handleCmdClick = async (e: MouseEvent, view: EditorView, references: boolean) => {
     if (!langId) return false;
     const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
     if (pos == null) return false;
+    // Highlight the word under the click so it's visually obvious which
+    // symbol the popover/jump is acting on. Falls back to a 1-char marker
+    // if the language doesn't recognize a word here.
+    const word = view.state.wordAt(pos);
+    const hi = word ?? { from: pos, to: Math.min(pos + 1, view.state.doc.length) };
+    view.dispatch({ effects: setClickHighlightEffect.of({ from: hi.from, to: hi.to }) });
+    const symbol = word ? view.state.sliceDoc(word.from, word.to) : undefined;
     const { line, character } = offsetToLsp(view.state.doc, pos);
     if (references) {
       const result = await window.opendev.lsp.request<Array<{ uri: string; range: { start: { line: number; character: number } } }>>('textDocument/references', {
@@ -253,12 +321,18 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
       });
       if (result && result.length) {
         setReferences({
+          symbol,
           items: result.map(r => ({
             path: r.uri.replace(/^file:\/\//, ''),
             line: r.range.start.line,
             col: r.range.start.character
-          }))
+          })),
+          anchor: { x: e.clientX, y: e.clientY }
         });
+      } else {
+        // Empty / no result — still pop the popover so the user knows we
+        // tried; otherwise the click looks unresponsive.
+        setReferences({ symbol, items: [], anchor: { x: e.clientX, y: e.clientY } });
       }
       return true;
     }
@@ -286,6 +360,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
         breakpointField,
         makeBreakpointGutter(path),
         pausedLineField,
+        clickHighlightField,
         lineNumbers(),
         foldGutter(),
         history(),
@@ -316,9 +391,14 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
         ...(blameOn ? [blameGutter] : []),
         EditorView.domEventHandlers({
           mousedown: (e, view) => {
-            if (!(e.metaKey || e.ctrlKey)) return false;
+            // References chord checked first — when it shares all of
+            // GotoDef's mods plus extras (default case: meta vs meta+shift),
+            // the exact-match comparison still routes correctly.
+            const isRefs = chordMatches(e as MouseEvent, findRefChordRef.current);
+            const isDef  = !isRefs && chordMatches(e as MouseEvent, gotoDefChordRef.current);
+            if (!isRefs && !isDef) return false;
             e.preventDefault();
-            handleCmdClick(e as MouseEvent, view, e.shiftKey);
+            handleCmdClick(e as MouseEvent, view, isRefs);
             return true;
           }
         }),

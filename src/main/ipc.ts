@@ -28,6 +28,7 @@ import { registerMlxIpc } from './mlx.js';
 import { registerPythonIpc } from './python.js';
 import { registerRunConfigsIpc } from './runConfigs.js';
 import { registerPipIpc } from './pip.js';
+import { registerLocalModelsIpc } from './localModels.js';
 import { ipcMain as electronIpc } from 'electron';
 
 export function registerIpc() {
@@ -51,6 +52,23 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.SettingsGet, () => loadSettings());
   ipcMain.handle(IPC.SettingsSet, (_e, patch) => patchSettings(patch));
+
+  // Manual "free unused resources" trigger from the bottom-bar widget.
+  // Kills all idle LSP servers (they respawn lazily on next use) and
+  // hints V8 to compact. Renderer-side drops its own log buffers
+  // independently. Returns the per-stage savings for a useful toast.
+  ipcMain.handle(IPC.SystemFreeMemory, async () => {
+    const { killAllLspServers } = await import('./lsp.js');
+    const before = process.memoryUsage().rss;
+    const lspsKilled = killAllLspServers();
+    // V8 gc() is only exposed with --expose-gc, which the IDE doesn't
+    // launch with — so we don't try to call it. Killing the LSP children
+    // is the load-bearing reclaim; their RSS frees back to the OS.
+    // Give the OS a beat to reap the children before measuring.
+    await new Promise((r) => setTimeout(r, 250));
+    const after = process.memoryUsage().rss;
+    return { lspsKilled, mainRssBefore: before, mainRssAfter: after };
+  });
 
   registerFsIpc();
   registerSearchIpc();
@@ -77,8 +95,21 @@ export function registerIpc() {
   registerPythonIpc();
   registerRunConfigsIpc();
   registerPipIpc();
+  registerLocalModelsIpc();
 
-  startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
+  // Gate the MCP HTTP server on the user's opt-in setting. Default true
+  // for backward compat; users who toggle it off in Settings get the
+  // ~20-30 MB back next launch.
+  loadSettings().then((s) => {
+    if (s.mcpEnabled === false) {
+      console.log('[mcp] disabled via settings — not starting HTTP server');
+      return;
+    }
+    startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
+  }).catch(() => {
+    // If settings load fails, fall through to the historical behavior.
+    startIdeMcpServer().catch((err) => console.error('mcp start failed', err));
+  });
 
   // Popout window for a single file (tab tear-off). Wiring lives here so the
   // main entry can stay focused on lifecycle.
