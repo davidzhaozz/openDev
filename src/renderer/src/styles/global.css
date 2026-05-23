@@ -1206,6 +1206,12 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
 .tree-row:hover .tree-glyph { color: var(--fg-1); }
 .tree-row.selected .tree-chev,
 .tree-row.selected .tree-glyph { color: rgba(255,255,255,0.85); }
+/* Expanded folders get a light-blue glyph + chev so the open branches
+   stand out from the gray of collapsed siblings. */
+.tree-row.dir-expanded .tree-chev,
+.tree-row.dir-expanded .tree-glyph { color: #9cdcfe; }
+.tree-row.dir-expanded:hover .tree-chev,
+.tree-row.dir-expanded:hover .tree-glyph { color: #c5e4ff; }
 /* Hidden entries (names starting with ".") render dimmer so dotfiles
    don't compete visually with real source. Selected state still uses
    the full-contrast highlight. */

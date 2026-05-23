@@ -21,6 +21,14 @@ export function FileTree({ root, onOpen }: Props) {
   const setTreeExpanded = useStore(s => s.setTreeExpanded);
   const setTreeSelected = useStore(s => s.setTreeSelected);
   const [branchPicker, setBranchPicker] = useState<{ path: string; name: string; current: string; branches: string[] } | null>(null);
+  // Electron / Chromium silently disable window.prompt(), so a fallback
+  // modal is the only way these context-menu inputs ever appear.
+  const [namePrompt, setNamePrompt] = useState<{
+    title: string;
+    initial: string;
+    confirmLabel: string;
+    onConfirm: (value: string) => void | Promise<void>;
+  } | null>(null);
 
   const loadDir = useCallback(async (dir: string) => {
     const items = await window.opendev.fs.list(dir);
@@ -228,7 +236,7 @@ export function FileTree({ root, onOpen }: Props) {
           <div
             key={node.path}
             data-tree-path={node.path}
-            className={`tree-row ${isSelected ? 'selected' : ''} ${isHidden ? 'hidden' : ''}`}
+            className={`tree-row ${isSelected ? 'selected' : ''} ${isHidden ? 'hidden' : ''} ${isExpandedDir ? 'dir-expanded' : ''}`}
             style={{ paddingLeft: 6 + depth * 12 }}
             onClick={(e) => {
               if (e.shiftKey && anchor) {
@@ -337,30 +345,61 @@ export function FileTree({ root, onOpen }: Props) {
             }}>Switch Branch…</div>
           )}
           {ctx.node.isDir && <div className="sep" />}
-          <div className="item" onClick={async () => {
-            const name = prompt('New file name:');
-            if (!name) return setCtx(null);
-            const dir = ctx.node.isDir ? ctx.node.path : ctx.node.path.split('/').slice(0, -1).join('/');
-            await window.opendev.fs.create(`${dir}/${name}`, false);
-            loadDir(dir);
+          <div className="item" onClick={() => {
+            const node = ctx.node;
             setCtx(null);
+            const dir = node.isDir ? node.path : node.path.split('/').slice(0, -1).join('/');
+            setNamePrompt({
+              title: 'New file',
+              initial: '',
+              confirmLabel: 'Create',
+              onConfirm: async (name) => {
+                try {
+                  await window.opendev.fs.create(`${dir}/${name}`, false);
+                  loadDir(dir);
+                } catch (e: any) {
+                  showToast(`Create failed: ${e?.message || e}`, 4000);
+                }
+              }
+            });
           }}>New File</div>
-          <div className="item" onClick={async () => {
-            const name = prompt('New folder name:');
-            if (!name) return setCtx(null);
-            const dir = ctx.node.isDir ? ctx.node.path : ctx.node.path.split('/').slice(0, -1).join('/');
-            await window.opendev.fs.create(`${dir}/${name}`, true);
-            loadDir(dir);
+          <div className="item" onClick={() => {
+            const node = ctx.node;
             setCtx(null);
+            const dir = node.isDir ? node.path : node.path.split('/').slice(0, -1).join('/');
+            setNamePrompt({
+              title: 'New folder',
+              initial: '',
+              confirmLabel: 'Create',
+              onConfirm: async (name) => {
+                try {
+                  await window.opendev.fs.create(`${dir}/${name}`, true);
+                  loadDir(dir);
+                } catch (e: any) {
+                  showToast(`Create failed: ${e?.message || e}`, 4000);
+                }
+              }
+            });
           }}>New Folder</div>
           <div className="sep" />
-          <div className="item" onClick={async () => {
-            const name = prompt('Rename to:', ctx.node.name);
-            if (!name) return setCtx(null);
-            const dir = ctx.node.path.split('/').slice(0, -1).join('/');
-            await window.opendev.fs.rename(ctx.node.path, `${dir}/${name}`);
-            loadDir(dir);
+          <div className="item" onClick={() => {
+            const node = ctx.node;
             setCtx(null);
+            const dir = node.path.split('/').slice(0, -1).join('/');
+            setNamePrompt({
+              title: `Rename ${node.isDir ? 'folder' : 'file'}`,
+              initial: node.name,
+              confirmLabel: 'Rename',
+              onConfirm: async (name) => {
+                if (name === node.name) return;
+                try {
+                  await window.opendev.fs.rename(node.path, `${dir}/${name}`);
+                  loadDir(dir);
+                } catch (e: any) {
+                  showToast(`Rename failed: ${e?.message || e}`, 4000);
+                }
+              }
+            });
           }}>Rename</div>
           <div className="item" onClick={async () => {
             const paths = selected.size > 1 && selected.has(ctx.node.path)
@@ -384,6 +423,82 @@ export function FileTree({ root, onOpen }: Props) {
           <div className="item" onClick={() => { window.opendev.fs.reveal(ctx.node.path); setCtx(null); }}>Reveal in Finder</div>
         </div>
       )}
+      {namePrompt && (
+        <NamePromptModal
+          title={namePrompt.title}
+          initial={namePrompt.initial}
+          confirmLabel={namePrompt.confirmLabel}
+          onCancel={() => setNamePrompt(null)}
+          onConfirm={async (v) => {
+            const trimmed = v.trim();
+            if (!trimmed) { setNamePrompt(null); return; }
+            const cb = namePrompt.onConfirm;
+            setNamePrompt(null);
+            await cb(trimmed);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NamePromptModal({ title, initial, confirmLabel, onCancel, onConfirm }: {
+  title: string;
+  initial: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: (value: string) => void | Promise<void>;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--bg-solid-1)', border: '1px solid var(--border-solid)',
+          borderRadius: 6, padding: 16, minWidth: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
+        }}
+      >
+        <div style={{ fontSize: 13, marginBottom: 10, color: 'var(--fg-0)' }}>{title}</div>
+        <input
+          autoFocus
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); onConfirm(value); }
+            else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+          }}
+          onFocus={(e) => {
+            // Select the basename (everything before the final extension) on
+            // open — matches the VSCode rename UX so users can replace just
+            // the name without retyping ".tsx" / ".py" / etc.
+            const dot = value.lastIndexOf('.');
+            if (dot > 0) e.currentTarget.setSelectionRange(0, dot);
+            else e.currentTarget.select();
+          }}
+          style={{
+            width: '100%', boxSizing: 'border-box', padding: '6px 8px',
+            background: 'var(--bg-solid-0)', color: 'var(--fg-0)',
+            border: '1px solid var(--border-solid)', borderRadius: 4, fontSize: 13
+          }}
+        />
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+          <button onClick={onCancel}>Cancel</button>
+          <button
+            onClick={() => onConfirm(value)}
+            style={{ background: 'var(--accent-hi)', color: '#fff', borderColor: 'var(--accent-hi)' }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
