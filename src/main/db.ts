@@ -896,3 +896,80 @@ export function registerDbIpc() {
 onShutdown(async () => {
   for (const id of [...pools.keys()]) await closePool(id);
 });
+
+// Direct-call API exposed for callers in the same process (the MCP server
+// wraps these as tools so external Claude/Codex sessions can drive the
+// DB panel exactly the way the renderer's UI does — same pools, same
+// password resolution, same per-workspace profile store).
+export const dbApi = {
+  listProfiles: () => readProfiles(),
+  connect: async (id: string) => {
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    await openPool(profile);
+    return true;
+  },
+  disconnect: (id: string) => closePool(id),
+  listDatabases: async (id: string) => {
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    const pool = await openPool(profile);
+    if (pool.driver === 'elasticsearch') {
+      const r = await esFetch(profile, pool.client.password, 'GET', '/', undefined, pool.client.relayHost, pool.client.relayPort);
+      const cluster = r.body?.cluster_name || 'cluster';
+      return { databases: [cluster], current: cluster };
+    }
+    if (pool.driver === 'mysql') {
+      const [rows] = await pool.client.query('SHOW DATABASES');
+      const names = (rows as Array<{ Database?: string; database?: string }>)
+        .map(r => (r.Database ?? r.database)!)
+        .filter(Boolean)
+        .filter((n: string) => !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(n));
+      return { databases: names, current: effectiveDatabase(profile) };
+    }
+    const r = await pool.client.query(
+      `SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true ORDER BY datname`);
+    const names = r.rows.map((x: { datname: string }) => x.datname);
+    return { databases: names, current: effectiveDatabase(profile) };
+  },
+  switchDatabase: async (id: string, dbName: string) => {
+    dbOverrides.set(id, dbName);
+    await closePool(id);
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    await openPool(profile);
+    return true;
+  },
+  schema: async (id: string) => {
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    const pool = await openPool(profile);
+    return fetchSchema(pool);
+  },
+  query: async (id: string, sql: string) => {
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    if (profile.readOnly && /^\s*(drop|delete|update|insert|truncate|alter)\b/i.test(sql)) {
+      throw new Error('Connection is read-only');
+    }
+    const pool = await openPool(profile);
+    return runQuery(pool, sql);
+  },
+  esRequest: async (id: string, payload: { method?: string; path?: string; body?: unknown }) => {
+    const items = await readProfiles();
+    const profile = items.find(i => i.id === id);
+    if (!profile) throw new Error('Profile not found');
+    if (profile.driver !== 'elasticsearch') throw new Error('Not an ES connection');
+    const pool = await openPool(profile);
+    const start = Date.now();
+    const method = (payload.method || 'GET').toUpperCase();
+    const path = payload.path || '/_search';
+    const r = await esFetch(pool.profile, pool.client.password, method, path, payload.body, pool.client.relayHost, pool.client.relayPort);
+    return { status: r.status, body: r.body, durationMs: Date.now() - start };
+  }
+};

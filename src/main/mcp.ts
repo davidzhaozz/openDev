@@ -30,6 +30,9 @@ import { listListeningPorts } from './ports.js';
 import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
+import { dbApi } from './db.js';
+import { mlxServer } from './localModels.js';
+import { listLocalModels } from './aiLocal.js';
 import type { RestSavedRequest } from '@shared/types';
 import { loadSettings, patchSettings } from './storage.js';
 import { onShutdown } from './lifecycle.js';
@@ -151,11 +154,49 @@ const TOOLS: ToolDef[] = [
   { name: 'ide_rest_delete', description: 'Delete a saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'ide_rest_open_saved', description: 'Open a saved REST request in the center workspace, optionally sending it immediately. Use with id from ide_rest_list_saved.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, send: { type: 'boolean', description: 'If true, fire the request as soon as it loads.' } }, required: ['id'] } },
 
-  // IDE panel control — the right column hosts AI/DB/ES/REST; the bottom application bar hosts LOG/DEBUG. The AI can drive both.
-  { name: 'ide_set_right_tab', description: 'Switch the right-panel tab. Valid values: "ai", "db", "es", "rest".', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ai', 'db', 'es', 'rest'] } }, required: ['tab'] } },
+  // IDE panel control — the right column hosts AI/DB/ES/REST/ML/LLM; the bottom application bar hosts LOG/DEBUG. The AI can drive both.
+  { name: 'ide_set_right_tab', description: 'Switch the right-panel tab. Valid values: "ai", "db", "es", "rest", "ml", "llm".', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ai', 'db', 'es', 'rest', 'ml', 'llm'] } }, required: ['tab'] } },
   { name: 'ide_get_right_tab', description: 'Return which right-panel tab is currently selected.', inputSchema: { type: 'object', properties: {} } },
   { name: 'ide_set_bottom_tab', description: 'Switch the bottom application-bar tab. Valid values: "log", "debug". Expands the bar if collapsed.', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['log', 'debug'] } }, required: ['tab'] } },
-  { name: 'ide_get_bottom_tab', description: 'Return which bottom-bar tab is currently selected and whether the bar is collapsed.', inputSchema: { type: 'object', properties: {} } }
+  { name: 'ide_get_bottom_tab', description: 'Return which bottom-bar tab is currently selected and whether the bar is collapsed.', inputSchema: { type: 'object', properties: {} } },
+
+  // Filesystem mutations beyond ide_write_file (which only writes whole files).
+  { name: 'ide_mkdir', description: 'Create a directory in the workspace (mkdir -p). No-op if it already exists.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  { name: 'ide_copy', description: 'Copy a file or directory tree to a new location inside the workspace. Recursive for directories. Errors if the destination exists.', inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, overwrite: { type: 'boolean', description: 'Allow overwriting an existing destination (default false).' } }, required: ['from', 'to'] } },
+  { name: 'ide_move', description: 'Move/rename a file or directory inside the workspace.', inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] } },
+  { name: 'ide_delete', description: 'Delete a file or directory inside the workspace (recursive for directories).', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+
+  // File-tree control (the left sidebar). Lets the AI reveal a path, expand
+  // or collapse folders, and read the current expansion set.
+  { name: 'ide_reveal_in_tree', description: 'Expand every ancestor folder of the given path in the left file tree and scroll it into view. Optionally select it.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, select: { type: 'boolean', description: 'Also select the revealed row (default true).' } }, required: ['path'] } },
+  { name: 'ide_expand_tree', description: 'Expand a folder in the left file tree. With recursive=true, also expand every directory beneath it.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] } },
+  { name: 'ide_collapse_tree', description: 'Collapse a folder (and everything beneath it) in the left file tree. Pass {all:true} to collapse the whole tree back to the workspace root.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, all: { type: 'boolean' } } } },
+  { name: 'ide_focus_tree', description: 'Move keyboard focus to the left file tree.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_tree_state', description: 'Return which folders are currently expanded and which row(s) are selected in the left file tree.', inputSchema: { type: 'object', properties: {} } },
+
+  // SQL / database connections. The IDE owns the connection pools; the AI
+  // talks to them by profile id (use ide_db_list_connections to discover ids).
+  { name: 'ide_db_list_connections', description: 'List all saved DB connection profiles in this workspace (SQL + Elasticsearch). Returns id, name, driver, host, port, database.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_db_connect', description: 'Open (or refresh) the connection pool for a saved profile by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_db_disconnect', description: 'Close the connection pool for a saved profile.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_db_list_databases', description: 'List the databases reachable through the given connection (MySQL/Postgres) or the cluster name (ES).', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_db_switch_database', description: 'Switch the active database for a SQL connection. Closes and re-opens the pool.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, database: { type: 'string' } }, required: ['id', 'database'] } },
+  { name: 'ide_db_schema', description: 'Return the schema (tables + columns) visible through a SQL connection.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_db_query', description: 'Run a SQL statement against a connection and return its result. Read-only profiles refuse DML/DDL.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, sql: { type: 'string' } }, required: ['id', 'sql'] } },
+
+  // Elasticsearch. Send a raw request via a saved ES connection profile.
+  { name: 'ide_es_request', description: 'Send a request to Elasticsearch through a saved ES profile. Returns { status, body, durationMs }.', inputSchema: { type: 'object', properties: {
+    id: { type: 'string', description: 'ES connection profile id.' },
+    method: { type: 'string', description: 'HTTP method, default GET.' },
+    path: { type: 'string', description: 'ES path, e.g. /_cat/indices?format=json, /my-index/_search. Defaults to /_search.' },
+    body: { description: 'JSON body for the request (omit for GET).' }
+  }, required: ['id'] } },
+
+  // Local LLM server (MLX) — the right-panel LLM tab.
+  { name: 'ide_llm_status', description: 'Return the current local-LLM server status: running, model, adapter, port, pid, recent log tail.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_llm_start', description: 'Start the local MLX-LM server with a model (and optional LoRA adapter). Replaces any running instance.', inputSchema: { type: 'object', properties: { model: { type: 'string' }, adapter: { type: 'string', description: 'Optional LoRA adapter path.' }, port: { type: 'number' } }, required: ['model'] } },
+  { name: 'ide_llm_stop', description: 'Stop the running local MLX-LM server, if any.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_llm_list_models', description: 'List the models the configured local LLM endpoint (Ollama / OpenAI-compatible) reports. Pass baseUrl to override the saved setting.', inputSchema: { type: 'object', properties: { baseUrl: { type: 'string' } } } }
 ];
 
 function resolveWorkspacePath(p: string | undefined): string {
@@ -170,12 +211,16 @@ function resolveWorkspacePath(p: string | undefined): string {
 // up from the renderer on change so MCP can answer instantly.
 let editorSnapshot: unknown = null;
 ipcMain.handle('mcp:editor-snapshot', (_e, snap) => { editorSnapshot = snap; return true; });
-// Renderer-callable command channel (open file + cursor jump + right-tab + bottom-tab + REST).
+// Renderer-callable command channel (open file + cursor jump + right-tab + bottom-tab + REST + tree).
 type RendererCmd =
   | { kind: 'open-file'; path: string; line?: number; col?: number }
   | { kind: 'set-right-tab'; tab: string }
   | { kind: 'set-bottom-tab'; tab: string }
-  | { kind: 'open-rest-saved'; savedId: string; send?: boolean };
+  | { kind: 'open-rest-saved'; savedId: string; send?: boolean }
+  | { kind: 'tree-reveal'; path: string; select?: boolean }
+  | { kind: 'tree-expand'; path: string; recursive?: boolean }
+  | { kind: 'tree-collapse'; path?: string; all?: boolean }
+  | { kind: 'tree-focus' };
 const rendererListeners = new Set<(cmd: RendererCmd) => void>();
 ipcMain.handle('mcp:subscribe-commands', () => true);
 function dispatchToRenderer(cmd: RendererCmd) {
@@ -418,8 +463,8 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
       }
       case 'ide_set_right_tab': {
         const tab = String(args?.tab ?? '');
-        if (!['ai', 'db', 'es', 'rest'].includes(tab)) {
-          throw new Error('tab must be one of: ai, db, es, rest');
+        if (!['ai', 'db', 'es', 'rest', 'ml', 'llm'].includes(tab)) {
+          throw new Error('tab must be one of: ai, db, es, rest, ml, llm');
         }
         dispatchToRenderer({ kind: 'set-right-tab', tab });
         return ok(`right-tab set to ${tab}`);
@@ -439,6 +484,131 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
       case 'ide_get_bottom_tab': {
         const snap = editorSnapshot as { bottomTab?: string; bottomCollapsed?: boolean } | null;
         return ok({ tab: snap?.bottomTab ?? '(unknown)', collapsed: snap?.bottomCollapsed ?? false });
+      }
+
+      // --- filesystem mutations ---------------------------------------
+      case 'ide_mkdir': {
+        const p = resolveWorkspacePath(args?.path);
+        if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
+        await fs.mkdir(p, { recursive: true });
+        return ok(`created ${p}`);
+      }
+      case 'ide_copy': {
+        if (!args?.from || !args?.to) throw new Error('from and to required');
+        const from = resolveWorkspacePath(String(args.from));
+        const to = resolveWorkspacePath(String(args.to));
+        if (!safeWithinRoot(from) || !safeWithinRoot(to)) throw new Error('Path outside workspace');
+        await fs.mkdir(join(to, '..'), { recursive: true });
+        await fs.cp(from, to, { recursive: true, force: !!args.overwrite, errorOnExist: !args.overwrite });
+        return ok(`copied ${from} → ${to}`);
+      }
+      case 'ide_move': {
+        if (!args?.from || !args?.to) throw new Error('from and to required');
+        const from = resolveWorkspacePath(String(args.from));
+        const to = resolveWorkspacePath(String(args.to));
+        if (!safeWithinRoot(from) || !safeWithinRoot(to)) throw new Error('Path outside workspace');
+        await fs.mkdir(join(to, '..'), { recursive: true });
+        await fs.rename(from, to);
+        return ok(`moved ${from} → ${to}`);
+      }
+      case 'ide_delete': {
+        const p = resolveWorkspacePath(args?.path);
+        if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
+        if (p === workspace.getRoot()) throw new Error('Refusing to delete the workspace root');
+        await fs.rm(p, { recursive: true, force: true });
+        return ok(`deleted ${p}`);
+      }
+
+      // --- file-tree control -----------------------------------------
+      case 'ide_reveal_in_tree': {
+        const p = resolveWorkspacePath(args?.path);
+        if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
+        dispatchToRenderer({ kind: 'tree-reveal', path: p, select: args?.select !== false });
+        return ok(`revealing ${p}`);
+      }
+      case 'ide_expand_tree': {
+        const p = resolveWorkspacePath(args?.path);
+        if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
+        dispatchToRenderer({ kind: 'tree-expand', path: p, recursive: !!args?.recursive });
+        return ok(`expanding ${p}${args?.recursive ? ' (recursive)' : ''}`);
+      }
+      case 'ide_collapse_tree': {
+        if (args?.all) { dispatchToRenderer({ kind: 'tree-collapse', all: true }); return ok('collapsed all'); }
+        if (!args?.path) throw new Error('path or all=true required');
+        const p = resolveWorkspacePath(args.path);
+        if (!safeWithinRoot(p)) throw new Error('Path outside workspace');
+        dispatchToRenderer({ kind: 'tree-collapse', path: p });
+        return ok(`collapsed ${p}`);
+      }
+      case 'ide_focus_tree': {
+        dispatchToRenderer({ kind: 'tree-focus' });
+        return ok('focusing file tree');
+      }
+      case 'ide_tree_state': {
+        const snap = editorSnapshot as { treeExpanded?: string[]; treeSelected?: string[] } | null;
+        return ok({
+          expanded: snap?.treeExpanded ?? [],
+          selected: snap?.treeSelected ?? []
+        });
+      }
+
+      // --- DB tools ---------------------------------------------------
+      case 'ide_db_list_connections': {
+        const profiles = await dbApi.listProfiles();
+        return ok(profiles.map(p => ({ id: p.id, name: p.name, driver: p.driver, host: p.host, port: p.port, database: p.database, readOnly: p.readOnly })));
+      }
+      case 'ide_db_connect': {
+        if (!args?.id) throw new Error('id required');
+        await dbApi.connect(String(args.id));
+        return ok(`connected ${args.id}`);
+      }
+      case 'ide_db_disconnect': {
+        if (!args?.id) throw new Error('id required');
+        await dbApi.disconnect(String(args.id));
+        return ok(`disconnected ${args.id}`);
+      }
+      case 'ide_db_list_databases': {
+        if (!args?.id) throw new Error('id required');
+        return ok(await dbApi.listDatabases(String(args.id)));
+      }
+      case 'ide_db_switch_database': {
+        if (!args?.id || !args?.database) throw new Error('id and database required');
+        await dbApi.switchDatabase(String(args.id), String(args.database));
+        return ok(`${args.id} → ${args.database}`);
+      }
+      case 'ide_db_schema': {
+        if (!args?.id) throw new Error('id required');
+        return ok(await dbApi.schema(String(args.id)));
+      }
+      case 'ide_db_query': {
+        if (!args?.id || !args?.sql) throw new Error('id and sql required');
+        return ok(await dbApi.query(String(args.id), String(args.sql)));
+      }
+
+      // --- ES tool ----------------------------------------------------
+      case 'ide_es_request': {
+        if (!args?.id) throw new Error('id required');
+        return ok(await dbApi.esRequest(String(args.id), {
+          method: args.method ? String(args.method) : undefined,
+          path: args.path ? String(args.path) : undefined,
+          body: args.body
+        }));
+      }
+
+      // --- Local LLM (MLX) -------------------------------------------
+      case 'ide_llm_status':
+        return ok(mlxServer.getStatus());
+      case 'ide_llm_start': {
+        if (!args?.model) throw new Error('model required');
+        await mlxServer.start({ model: String(args.model), adapter: args?.adapter ? String(args.adapter) : null, port: typeof args?.port === 'number' ? args.port : undefined });
+        return ok(mlxServer.getStatus());
+      }
+      case 'ide_llm_stop':
+        await mlxServer.stop();
+        return ok(mlxServer.getStatus());
+      case 'ide_llm_list_models': {
+        const r = await listLocalModels(args?.baseUrl ? String(args.baseUrl) : undefined);
+        return ok(r);
       }
     }
     return err(`Unknown tool: ${name}`);

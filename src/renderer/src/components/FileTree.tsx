@@ -18,6 +18,8 @@ export function FileTree({ root, onOpen }: Props) {
   const showToast = useStore(s => s.showToast);
   const openTerminalTab = useStore(s => s.openTerminalTab);
   const setModal = useStore(s => s.setModal);
+  const setTreeExpanded = useStore(s => s.setTreeExpanded);
+  const setTreeSelected = useStore(s => s.setTreeSelected);
   const [branchPicker, setBranchPicker] = useState<{ path: string; name: string; current: string; branches: string[] } | null>(null);
 
   const loadDir = useCallback(async (dir: string) => {
@@ -82,6 +84,108 @@ export function FileTree({ root, onOpen }: Props) {
     return () => window.removeEventListener('opendev:filetree-refresh', h);
   }, [refreshAll]);
 
+  // Mirror the live expansion + selection sets into the store so the MCP
+  // ide_tree_state tool can read them without prop-drilling.
+  useEffect(() => { setTreeExpanded([...expanded]); }, [expanded, setTreeExpanded]);
+  useEffect(() => { setTreeSelected([...selected]); }, [selected, setTreeSelected]);
+
+  // MCP-driven tree control. Each command arrives as a CustomEvent dispatched
+  // by App.tsx after it receives the corresponding mcp:command. We re-use the
+  // already-cached fs.list / loadDir flow so the visible state matches what
+  // a manual click would produce (children loaded, watcher attached).
+  useEffect(() => {
+    const collectAncestors = (target: string): string[] => {
+      if (!target.startsWith(root)) return [];
+      const out: string[] = [];
+      let cur = target;
+      while (cur && cur !== root && cur.length > root.length) {
+        const parent = cur.split('/').slice(0, -1).join('/');
+        if (!parent) break;
+        out.push(parent);
+        cur = parent;
+      }
+      return out;
+    };
+
+    const onReveal = async (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; select?: boolean }>).detail || {};
+      const path = detail.path;
+      if (!path || !path.startsWith(root)) return;
+      const ancestors = collectAncestors(path);
+      // Expand ancestors top-down and load their children before adding the
+      // next layer, so each newly-visible row has its kids ready.
+      const next = new Set(expanded);
+      for (const dir of [...ancestors].reverse()) {
+        if (!next.has(dir)) {
+          next.add(dir);
+          await loadDir(dir);
+          window.opendev.fs.watch(dir).catch(() => {});
+        }
+      }
+      setExpanded(next);
+      if (detail.select) setSelected(new Set([path]));
+      // Defer the scroll one frame so the newly-expanded rows are in the DOM.
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-tree-path="${CSS.escape(path)}"]`);
+        if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+          (el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      });
+    };
+
+    const onExpand = async (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; recursive?: boolean }>).detail || {};
+      const path = detail.path;
+      if (!path || !path.startsWith(root)) return;
+      const next = new Set(expanded);
+      next.add(path);
+      await loadDir(path);
+      window.opendev.fs.watch(path).catch(() => {});
+      if (detail.recursive) {
+        // BFS the loaded subtree, expanding every directory we encounter.
+        const queue: string[] = [path];
+        while (queue.length) {
+          const dir = queue.shift()!;
+          const kids = (await window.opendev.fs.list(dir)).filter(k => k.isDir);
+          for (const k of kids) {
+            next.add(k.path);
+            queue.push(k.path);
+          }
+        }
+      }
+      setExpanded(next);
+    };
+
+    const onCollapse = (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; all?: boolean }>).detail || {};
+      if (detail.all) { setExpanded(new Set([root])); return; }
+      const path = detail.path;
+      if (!path) return;
+      setExpanded(prev => {
+        const next = new Set(prev);
+        // Collapse the target and everything beneath it.
+        for (const p of next) { if (p === path || p.startsWith(path + '/')) next.delete(p); }
+        return next;
+      });
+    };
+
+    const onFocus = () => {
+      const el = document.querySelector('.tree') as HTMLElement | null;
+      if (el) { el.setAttribute('tabindex', '-1'); el.focus({ preventScroll: false }); }
+    };
+
+    window.addEventListener('opendev:filetree-reveal', onReveal as EventListener);
+    window.addEventListener('opendev:filetree-expand', onExpand as EventListener);
+    window.addEventListener('opendev:filetree-collapse', onCollapse as EventListener);
+    window.addEventListener('opendev:filetree-focus', onFocus);
+    return () => {
+      window.removeEventListener('opendev:filetree-reveal', onReveal as EventListener);
+      window.removeEventListener('opendev:filetree-expand', onExpand as EventListener);
+      window.removeEventListener('opendev:filetree-collapse', onCollapse as EventListener);
+      window.removeEventListener('opendev:filetree-focus', onFocus);
+    };
+  }, [root, expanded, loadDir]);
+
   const [rootGitInfo, setRootGitInfo] = useState<FileNode['gitInfo'] | undefined>();
   useEffect(() => {
     let alive = true;
@@ -123,6 +227,7 @@ export function FileTree({ root, onOpen }: Props) {
         return (
           <div
             key={node.path}
+            data-tree-path={node.path}
             className={`tree-row ${isSelected ? 'selected' : ''} ${isHidden ? 'hidden' : ''}`}
             style={{ paddingLeft: 6 + depth * 12 }}
             onClick={(e) => {

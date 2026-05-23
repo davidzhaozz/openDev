@@ -110,6 +110,13 @@ type Store = {
   modalPayload?: unknown;
   setModal: (m: ModalKind, payload?: unknown) => void;
 
+  // Live mirror of FileTree's expansion set so other surfaces (MCP
+  // ide_tree_state, telemetry) can read it without prop-drilling.
+  treeExpanded: string[];
+  treeSelected: string[];
+  setTreeExpanded: (paths: string[]) => void;
+  setTreeSelected: (paths: string[]) => void;
+
   services: ServiceDef[];
   serviceStatuses: Record<string, ServiceRuntime>;
   serviceLogs: Record<string, string>;
@@ -481,6 +488,11 @@ export const useStore = create<Store>((set, get) => ({
 
   modal: null,
   setModal: (m, payload) => set({ modal: m, modalPayload: payload }),
+
+  treeExpanded: [],
+  treeSelected: [],
+  setTreeExpanded: (paths) => set({ treeExpanded: paths }),
+  setTreeSelected: (paths) => set({ treeSelected: paths }),
 
   services: [],
   serviceStatuses: {},

@@ -132,7 +132,7 @@ class MlxServerManager {
   }
 }
 
-const mlxServer = new MlxServerManager();
+export const mlxServer = new MlxServerManager();
 onShutdown(() => mlxServer.stop());
 
 // ---------------------------------------------------------------------------

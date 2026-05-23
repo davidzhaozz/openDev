@@ -309,6 +309,8 @@ export default function App() {
   // Push an editor-state snapshot to the main process so the MCP server can
   // answer "what is the user looking at right now" without a renderer
   // roundtrip. Snapshot whenever tabs/active change.
+  const treeExpanded = useStore(s => s.treeExpanded);
+  const treeSelected = useStore(s => s.treeSelected);
   useEffect(() => {
     const active = tabs.find(t => t.id === activeId);
     const snap = {
@@ -322,10 +324,12 @@ export default function App() {
       activeFileContent: active && active.kind === 'file' ? (active.dirtyContent ?? active.content) : undefined,
       rightTab,
       bottomTab,
-      bottomCollapsed
+      bottomCollapsed,
+      treeExpanded,
+      treeSelected
     };
     try { window.opendev.mcp.pushEditorSnapshot(snap); } catch {}
-  }, [tabs, activeId, root, rightTab, bottomTab, bottomCollapsed]);
+  }, [tabs, activeId, root, rightTab, bottomTab, bottomCollapsed, treeExpanded, treeSelected]);
 
   // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
   useEffect(() => {
@@ -354,6 +358,14 @@ export default function App() {
           });
           if (cmd.send) useStore.getState().triggerRestRun();
         }).catch(() => {});
+      } else if (cmd?.kind === 'tree-reveal' && cmd.path) {
+        window.dispatchEvent(new CustomEvent('opendev:filetree-reveal', { detail: { path: cmd.path, select: (cmd as any).select !== false } }));
+      } else if (cmd?.kind === 'tree-expand' && cmd.path) {
+        window.dispatchEvent(new CustomEvent('opendev:filetree-expand', { detail: { path: cmd.path, recursive: !!(cmd as any).recursive } }));
+      } else if (cmd?.kind === 'tree-collapse') {
+        window.dispatchEvent(new CustomEvent('opendev:filetree-collapse', { detail: { path: cmd.path, all: !!(cmd as any).all } }));
+      } else if (cmd?.kind === 'tree-focus') {
+        window.dispatchEvent(new Event('opendev:filetree-focus'));
       }
     };
     const off = (window.opendev as any).mcp?.onCommand?.(handler);
