@@ -109,7 +109,11 @@ const api = {
     reveal: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsReveal, path),
     onWatch: (cb: (ev: FileChange) => void) => on(IPC.FsWatchEvent, cb),
     watch: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsWatch, path),
-    unwatch: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsUnwatch, path)
+    unwatch: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsUnwatch, path),
+    // Per-open-file change detection — drives the editor's reload-from-disk prompt.
+    watchFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsWatchFile, path),
+    unwatchFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.FsUnwatchFile, path),
+    onFileChanged: (cb: (path: string) => void) => on(IPC.FsFileChanged, cb)
   },
   search: {
     fuzzy: (q: string, limit?: number): Promise<Array<{ path: string; score: number; relative?: string }>> =>

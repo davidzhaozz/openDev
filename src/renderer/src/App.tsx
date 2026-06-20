@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './state/store';
 import { FileTree } from './components/FileTree';
 import { CodeEditor } from './components/Editor';
@@ -43,6 +43,9 @@ export default function App() {
   const setActive = useStore(s => s.setActiveCenterTab);
   const updateContent = useStore(s => s.updateFileContent);
   const markSaved = useStore(s => s.markFileSaved);
+  const flagExternalChange = useStore(s => s.flagExternalFileChange);
+  const reloadFromDisk = useStore(s => s.reloadFileFromDisk);
+  const keepLocalVersion = useStore(s => s.keepLocalFileVersion);
   const renameCenterTab = useStore(s => s.renameCenterTab);
   const [tabCtx, setTabCtx] = useState<{ x: number; y: number; id: string } | null>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | undefined>();
@@ -84,6 +87,41 @@ export default function App() {
       document.removeEventListener('dragenter', onEnter, true);
     };
   }, []);
+
+  // Watch every open file for on-disk changes so the editor can offer to
+  // reload when something outside the IDE (git, a formatter, another tool)
+  // rewrites it. A watcher is registered per distinct open-file path and
+  // torn down once the last tab for that path closes.
+  const openFilePaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of tabs) if (t.kind === 'file') set.add(t.path);
+    return Array.from(set);
+  }, [tabs]);
+  const openFilePathsKey = openFilePaths.join('\n');
+  useEffect(() => {
+    const paths = openFilePathsKey ? openFilePathsKey.split('\n') : [];
+    for (const p of paths) window.opendev.fs.watchFile(p).catch(() => {});
+    return () => {
+      for (const p of paths) window.opendev.fs.unwatchFile(p).catch(() => {});
+    };
+  }, [openFilePathsKey]);
+
+  // When a watched file changes on disk, re-read it and let the store decide
+  // whether the open buffer is now stale (it ignores our own saves and any
+  // change that already matches the buffer).
+  useEffect(() => {
+    return window.opendev.fs.onFileChanged(async (path) => {
+      // Only care about files we actually have open.
+      if (!useStore.getState().centerTabs.some(t => t.kind === 'file' && t.path === path)) return;
+      try {
+        const disk = await window.opendev.fs.read(path);
+        flagExternalChange(path, disk);
+      } catch {
+        // Read failed (file deleted/renamed/too large) — leave the buffer
+        // untouched rather than wiping the user's work.
+      }
+    });
+  }, [flagExternalChange]);
 
   // Detect missing Node/npm when a workspace becomes active — services
   // won't be able to start without it, so offer to install via Homebrew.
@@ -626,16 +664,30 @@ export default function App() {
               {tabs.map(t => (
                 <div key={t.id} style={{ height: '100%', display: activeId === t.id ? 'block' : 'none' }}>
                   {t.kind === 'file' && (
-                    <CodeEditor
-                      path={t.path}
-                      value={t.dirtyContent ?? t.content}
-                      onChange={(s) => updateContent(t.id, s)}
-                      onSave={async () => {
-                        await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
-                        markSaved(t.id);
-                      }}
-                      onJumpTo={jumpTo}
-                    />
+                    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                      {t.externallyChanged && (
+                        <div className="disk-change-banner">
+                          <span className="disk-change-msg">
+                            This file changed on disk{t.modified ? ' — reloading discards your unsaved edits.' : '.'}
+                          </span>
+                          <span className="grow" />
+                          <button onClick={() => reloadFromDisk(t.id)}>Reload</button>
+                          <button onClick={() => keepLocalVersion(t.id)}>Keep mine</button>
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minHeight: 0 }}>
+                        <CodeEditor
+                          path={t.path}
+                          value={t.dirtyContent ?? t.content}
+                          onChange={(s) => updateContent(t.id, s)}
+                          onSave={async () => {
+                            await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
+                            markSaved(t.id);
+                          }}
+                          onJumpTo={jumpTo}
+                        />
+                      </div>
+                    </div>
                   )}
                   {t.kind === 'terminal' && <TerminalView cwd={t.cwd} />}
                   {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} />}

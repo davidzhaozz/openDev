@@ -23,7 +23,7 @@ export type SqlSource = {
 export type DesignProposal = { name: string; html: string };
 
 export type CenterTab =
-  | { kind: 'file'; id: string; path: string; name: string; content: string; modified: boolean; dirtyContent?: string }
+  | { kind: 'file'; id: string; path: string; name: string; content: string; modified: boolean; dirtyContent?: string; externallyChanged?: boolean; diskContent?: string }
   | { kind: 'terminal'; id: string; name: string; termId?: string; cwd: string }
   | { kind: 'browser'; id: string; name: string; url: string }
   | { kind: 'sql'; id: string; name: string }
@@ -94,6 +94,10 @@ type Store = {
   setActiveCenterTab: (id: string) => void;
   updateFileContent: (id: string, content: string) => void;
   markFileSaved: (id: string) => void;
+  // External (on-disk) change reconciliation for open file tabs.
+  flagExternalFileChange: (path: string, diskContent: string) => void;
+  reloadFileFromDisk: (id: string) => void;
+  keepLocalFileVersion: (id: string) => void;
 
   bottomTab: BottomTabKey;
   setBottomTab: (t: BottomTabKey) => void;
@@ -469,9 +473,46 @@ export const useStore = create<Store>((set, get) => ({
       : t)
   })),
   markFileSaved: (id) => set((s) => ({
+    // Saving makes our buffer the new on-disk truth, so any pending
+    // external-change prompt is moot — clear it.
     centerTabs: s.centerTabs.map(t => t.id === id && t.kind === 'file'
-      ? { ...t, content: t.dirtyContent ?? t.content, dirtyContent: undefined, modified: false }
+      ? { ...t, content: t.dirtyContent ?? t.content, dirtyContent: undefined, modified: false, externallyChanged: false, diskContent: undefined }
       : t)
+  })),
+  flagExternalFileChange: (path, diskContent) => set((s) => ({
+    centerTabs: s.centerTabs.map(t => {
+      if (t.kind !== 'file' || t.path !== path) return t;
+      // No-op if the editor already reflects what's on disk — this fires
+      // for the watcher event triggered by our own save, and whenever the
+      // user's current buffer already matches the new bytes.
+      if (diskContent === t.content || diskContent === (t.dirtyContent ?? t.content)) {
+        return { ...t, externallyChanged: false, diskContent: undefined };
+      }
+      return { ...t, externallyChanged: true, diskContent };
+    })
+  })),
+  reloadFileFromDisk: (id) => set((s) => ({
+    centerTabs: s.centerTabs.map(t => t.id === id && t.kind === 'file' && t.diskContent !== undefined
+      ? { ...t, content: t.diskContent, dirtyContent: undefined, modified: false, externallyChanged: false, diskContent: undefined }
+      : t)
+  })),
+  keepLocalFileVersion: (id) => set((s) => ({
+    centerTabs: s.centerTabs.map(t => {
+      if (t.id !== id || t.kind !== 'file' || t.diskContent === undefined) return t;
+      // Adopt the new on-disk bytes as the saved baseline while keeping the
+      // user's buffer. The buffer now diverges from disk, so it reads as
+      // modified — saving will overwrite the external change, as intended.
+      const buffer = t.dirtyContent ?? t.content;
+      const diverged = buffer !== t.diskContent;
+      return {
+        ...t,
+        content: t.diskContent,
+        dirtyContent: diverged ? buffer : undefined,
+        modified: diverged,
+        externallyChanged: false,
+        diskContent: undefined
+      };
+    })
   })),
 
   bottomTab: 'log',

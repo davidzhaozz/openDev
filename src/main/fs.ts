@@ -1,11 +1,41 @@
 import { ipcMain } from 'electron';
-import { promises as fs } from 'fs';
+import { promises as fs, watchFile, unwatchFile } from 'fs';
 import { join, basename, dirname, resolve, relative } from 'path';
 import { IPC } from '@shared/ipc';
 import type { FileNode } from '@shared/types';
 import { workspace, safeWithinRoot } from './workspace.js';
 import { invalidateFileIndex } from './search.js';
+import { safeSend } from './safeSend.js';
 import { LIMITS } from './limits.js';
+
+// ── Per-open-file change detection ───────────────────────────────────
+// The directory watcher in workspace.ts only refreshes the file tree; it
+// can't tell an open editor buffer that its file was rewritten on disk
+// (by git, a formatter, another editor, etc.). We watch each open file
+// individually via fs.watchFile — stat polling, which (unlike fs.watch)
+// keeps firing across the temp-write+rename that most tools use to save
+// atomically. The count of open editor tabs is tiny, so the polling cost
+// is negligible (the EMFILE concerns that ruled out recursive watching
+// don't apply here).
+const fileWatchers = new Set<string>();
+
+function watchFileForEditor(path: string): void {
+  if (fileWatchers.has(path)) return;
+  watchFile(path, { interval: 1000 }, (curr, prev) => {
+    // mtime or size moving = the bytes changed. curr.mtimeMs === 0 means
+    // the file was deleted; report that too so the editor can react.
+    if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) {
+      safeSend(IPC.FsFileChanged, path);
+    }
+  });
+  fileWatchers.add(path);
+}
+
+function unwatchFileForEditor(path: string): void {
+  if (!fileWatchers.has(path)) return;
+  try { unwatchFile(path); } catch {}
+  fileWatchers.delete(path);
+}
 
 const IGNORE = new Set(['node_modules', '.git', 'dist', 'out', '.next', '.turbo', '.vite']);
 
@@ -159,6 +189,17 @@ export function registerFsIpc() {
   });
   ipcMain.handle(IPC.FsUnwatch, (_e, path: string) => {
     workspace.unwatchDir(path);
+    return true;
+  });
+
+  // Watch a single open file for on-disk changes (editor reload prompt).
+  ipcMain.handle(IPC.FsWatchFile, (_e, path: string) => {
+    if (!safeWithinRoot(path)) return false;
+    watchFileForEditor(path);
+    return true;
+  });
+  ipcMain.handle(IPC.FsUnwatchFile, (_e, path: string) => {
+    unwatchFileForEditor(path);
     return true;
   });
 }

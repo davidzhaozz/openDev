@@ -18,6 +18,10 @@ export const IPC = {
   FsWatchEvent: 'fs:watch-event',
   FsWatch: 'fs:watch',
   FsUnwatch: 'fs:unwatch',
+  // Per-open-file change detection (editor reload-on-disk-change).
+  FsWatchFile: 'fs:watch-file',
+  FsUnwatchFile: 'fs:unwatch-file',
+  FsFileChanged: 'fs:file-changed',
 
   // search
   SearchFuzzy: 'search:fuzzy',

@@ -2822,6 +2822,38 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   color: var(--fg-2);
 }
 
+/* ============= Editor: file-changed-on-disk banner ============= */
+.disk-change-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, rgba(255,193,7,0.16), rgba(255,193,7,0.06));
+  border-bottom: 1px solid rgba(255,193,7,0.35);
+  font-size: 12.5px;
+  color: var(--fg-0);
+}
+.disk-change-banner .grow { flex: 1; }
+.disk-change-msg { color: #f4b400; }
+.disk-change-banner button {
+  border: 1px solid var(--bg-3);
+  background: transparent;
+  color: var(--fg-1);
+  font-size: 12px;
+  padding: 4px 11px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.disk-change-banner button:first-of-type {
+  border-color: #4caf50;
+  background: #4caf50;
+  color: #fff;
+  font-weight: 600;
+}
+.disk-change-banner button:hover { filter: brightness(1.1); }
+.disk-change-banner button:not(:first-of-type):hover { background: var(--bg-3); filter: none; }
+
 /* ============= SQL editable grid + save bar ============= */
 .sql-savebar {
   flex: 0 0 auto;
