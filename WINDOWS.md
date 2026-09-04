@@ -30,8 +30,22 @@ gh run watch
 gh run download --name OpenDev-IDE-windows
 ```
 
-That produces `OpenDev IDE-<version>-x64.exe` (NSIS installer) and a portable
-`.exe` for machines where an installer can't be run.
+That produces `OpenDev IDE-<version>-x64.exe` (NSIS installer) and
+`OpenDev IDE-<version>-x64-portable.exe` for machines where an installer can't
+be run. The portable target needs its own `artifactName`: both default to
+`${productName}-${version}-${arch}.${ext}`, and portable renders second, so
+without it the portable build overwrites the installer and the job still
+reports success with a single `.exe` in the artifact.
+
+`npmRebuild` is off. node-pty 1.1 builds against node-addon-api and ships
+`prebuilds/win32-x64`; keytar publishes its binaries with `prebuild -r napi`.
+N-API is ABI-stable across Node and Electron, so both load under Electron as
+npm installed them. `@electron/rebuild` doesn't recognise the prebuildify
+layout and tries to compile node-pty from source anyway — the only thing in
+this build that wants a C++ toolchain, and it fails on the runner with
+"Could not find any Visual Studio installation to use". If a NAN-based native
+is ever added, the rebuild has to come back on and the runner needs a working
+MSVC.
 
 The build is **unsigned**, so SmartScreen warns on first launch until it's
 signed — set `CSC_LINK` and `CSC_KEY_PASSWORD` in the workflow environment with
