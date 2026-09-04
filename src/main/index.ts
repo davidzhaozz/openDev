@@ -60,6 +60,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 
+// macOS keeps its traffic lights and insets them over our own titlebar.
+// Windows and Linux go frameless and get the controls the renderer draws —
+// `titleBarOverlay` would give native buttons but cannot be combined with a
+// transparent window, and transparency is the whole point of the --bg-alpha
+// slider in Settings.
+function windowChromeOptions(): Electron.BrowserWindowConstructorOptions {
+  if (process.platform === 'darwin') {
+    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 } };
+  }
+  return { frame: false };
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -72,8 +84,7 @@ function createWindow() {
     // user moves the slider in Settings.
     transparent: true,
     backgroundColor: '#00000000',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
+    ...windowChromeOptions(),
     webPreferences: {
       preload: join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
       contextIsolation: true,
@@ -84,6 +95,12 @@ function createWindow() {
   });
 
   mainWindow.on('ready-to-show', () => mainWindow?.show());
+
+  // The frameless chrome draws its own maximize/restore glyph, so it needs to
+  // know when the state changes by any other route (double-click, Win+Up).
+  const sendMaximized = () => mainWindow?.webContents.send(IPC.WindowMaximizedChanged, mainWindow.isMaximized());
+  mainWindow.on('maximize', sendMaximized);
+  mainWindow.on('unmaximize', sendMaximized);
 
   // Drop the reference when the window is gone — otherwise `mainWindow`
   // keeps pointing at a destroyed BrowserWindow, and any later access to

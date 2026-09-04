@@ -1,11 +1,11 @@
 {
   "name": "opendev-ide",
-  "version": "0.7.13",
+  "version": "0.7.19",
   "description": "AI-first JavaScript / TypeScript / Java / C# IDE with embedded browser, SQL client, and Claude integration.",
   "main": "out/main/index.js",
   "author": {
     "name": "David Zhao",
-    "email": "david@situfamily.com",
+    "email": "zhao@situfamily.com",
     "url": "https://davidzhao.net"
   },
   "homepage": "https://davidzhao.net",
@@ -15,10 +15,16 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "postinstall": "node scripts/fix-native-perms.mjs",
     "predist": "node scripts/bump-version.mjs",
     "dist": "electron-vite build && electron-builder --mac --config electron-builder.yml",
     "dist:dir": "electron-vite build && electron-builder --mac --dir --config electron-builder.yml",
+    "dist:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
     "start": "electron-vite preview",
+    "web": "npm run web:build && node out-web/server/index.mjs --open",
+    "web:build": "vite build --config vite.server.config.ts && vite build --config vite.web.config.ts",
+    "web:server": "node out-web/server/index.mjs",
+    "web:dev": "vite --config vite.web.config.ts",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

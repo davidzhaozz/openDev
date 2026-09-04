@@ -112,6 +112,13 @@ export const IPC = {
   SessionLoad: 'session:load',
   WindowPopoutFile: 'window:popout-file',
   WindowPopoutAi: 'window:popout-ai',
+  // Frameless-window controls. macOS draws its own traffic lights over the
+  // titlebar; every other platform gets buttons the renderer draws and these
+  // channels drive.
+  WindowMinimize: 'window:minimize',
+  WindowMaximizeToggle: 'window:maximize-toggle',
+  WindowClose: 'window:close',
+  WindowMaximizedChanged: 'window:maximized-changed',
   GitWorktreeCreate: 'git:worktree-create',
   GitWorktreeList: 'git:worktree-list',
   GitWorktreeRemove: 'git:worktree-remove',

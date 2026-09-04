@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import { Resizer } from '../components/Resizer';
 import { JsonTree } from '../components/JsonTree';
 import { QueryHistoryButton } from '../components/QueryHistoryButton';
+import { modKey } from '../platformUi';
 
 function parseRequest(text: string): { method: string; path: string; body?: unknown; parseError?: string } {
   const trimmed = text.trim();
@@ -86,7 +87,7 @@ export function EsWorkspace() {
   return (
     <div className="sql-workspace">
       <div className="sql-toolbar">
-        <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : 'Send ⌘↵'}</button>
+        <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : `Send ${modKey()}↵`}</button>
         <span className="es-meta">{parsed.method} {parsed.path}</span>
         <QueryHistoryButton kind="es" refreshKey={historyTick} onPick={(text) => setEsText(text)} />
         <span className="grow" />

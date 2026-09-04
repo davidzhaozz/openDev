@@ -7,6 +7,7 @@ import { IPC } from '@shared/ipc';
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { onShutdown } from './lifecycle.js';
+import { pathToFileUri } from '@shared/paths';
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -151,8 +152,8 @@ function pyrightServerCmd(): { cmd: string; args: string[]; env: NodeJS.ProcessE
 async function initParams(root: string, kind: ServerKind) {
   const base: Record<string, unknown> = {
     processId: process.pid,
-    rootUri: `file://${root}`,
-    workspaceFolders: [{ uri: `file://${root}`, name: 'workspace' }],
+    rootUri: pathToFileUri(root),
+    workspaceFolders: [{ uri: pathToFileUri(root), name: 'workspace' }],
     capabilities: {
       textDocument: {
         synchronization: { dynamicRegistration: false, willSave: false, didSave: true },

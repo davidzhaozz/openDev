@@ -40,6 +40,8 @@ import { csharp as csharpLegacy } from '@codemirror/legacy-modes/mode/clike';
 import { python as pythonLegacy } from '@codemirror/legacy-modes/mode/python';
 import { yaml as yamlLegacy } from '@codemirror/legacy-modes/mode/yaml';
 import { StreamLanguage } from '@codemirror/language';
+import { baseName, dirName, fileUriToPath, pathToFileUri } from '@shared/paths';
+import { isMacPlatform } from '../platformUi';
 
 function langForPath(path: string) {
   const ext = path.split('.').pop()?.toLowerCase();
@@ -286,7 +288,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
     return () => window.removeEventListener('opendev:settings-changed', onChange);
   }, []);
 
-  const fileUri = `file://${path}`;
+  const fileUri = pathToFileUri(path);
   const langId = languageIdFor(path);
 
   // Compare the click's modifier state against a stored chord like "meta",
@@ -295,8 +297,19 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
   // match a plain "meta" click.
   const chordMatches = (e: MouseEvent, chord: string): boolean => {
     const parts = new Set(chord.split('+'));
-    return (parts.has('meta') === !!e.metaKey)
-      && (parts.has('ctrl') === !!e.ctrlKey)
+    if (isMacPlatform()) {
+      return (parts.has('meta') === !!e.metaKey)
+        && (parts.has('ctrl') === !!e.ctrlKey)
+        && (parts.has('alt')  === !!e.altKey)
+        && (parts.has('shift') === !!e.shiftKey);
+    }
+    // Windows and Linux have no Command key, so "⌘ + click" and "literal
+    // Control + click" collapse onto the same chord — either choice in
+    // Settings gives Ctrl+click. The Windows key (reported as metaKey) is
+    // never part of a chord.
+    const wantsCtrl = parts.has('meta') || parts.has('ctrl');
+    return (wantsCtrl === !!e.ctrlKey)
+      && !e.metaKey
       && (parts.has('alt')  === !!e.altKey)
       && (parts.has('shift') === !!e.shiftKey);
   };
@@ -323,7 +336,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
         setReferences({
           symbol,
           items: result.map(r => ({
-            path: r.uri.replace(/^file:\/\//, ''),
+            path: fileUriToPath(r.uri),
             line: r.range.start.line,
             col: r.range.start.character
           })),
@@ -346,7 +359,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
     const uri = loc.uri || loc.targetUri;
     const range = loc.range || loc.targetSelectionRange || loc.targetRange;
     if (!uri || !range) return true;
-    onJumpToRef.current?.(uri.replace(/^file:\/\//, ''), range.start.line, range.start.character);
+    onJumpToRef.current?.(fileUriToPath(uri), range.start.line, range.start.character);
     return true;
   };
 
@@ -487,7 +500,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
 
   const showCommit = async (hash: string) => {
     setShowingCommit(hash); setCommitDiff(null);
-    const dir = path.split('/').slice(0, -1).join('/');
+    const dir = dirName(path);
     const r = await window.opendev.git.show(dir, hash);
     if ('error' in r) setCommitDiff(`error: ${r.error}`);
     else setCommitDiff(r.diff);
@@ -496,7 +509,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
   // Open the diff full-screen as a center tab — replaces the cramped modal
   // pane for actual reading.
   const openCommitInTab = async (hash: string) => {
-    const dir = path.split('/').slice(0, -1).join('/');
+    const dir = dirName(path);
     const r = await window.opendev.git.show(dir, hash);
     if ('error' in r) return;
     useGlobalStore.getState().openDiffTab({ filePath: path, hash, diff: r.diff });
@@ -604,7 +617,7 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
         <div className="modal-overlay" onMouseDown={() => { setHistoryOpen(false); setShowingCommit(null); }}>
           <div className="modal git-history-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="git-history-header">
-              <span>History · {path.split('/').pop()}</span>
+              <span>History · {baseName(path)}</span>
               <span className="grow" />
               {historyList && <span className="git-history-count">{historyList.length} commit{historyList.length === 1 ? '' : 's'}</span>}
               <button onClick={() => { setHistoryOpen(false); setShowingCommit(null); }}>Close</button>

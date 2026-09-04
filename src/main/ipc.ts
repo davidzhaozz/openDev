@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, app } from 'electron';
+import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron';
 import { IPC } from '@shared/ipc';
 import { workspace } from './workspace.js';
 import { loadSettings, patchSettings } from './storage.js';
@@ -134,4 +134,16 @@ export function registerIpc() {
     createPopoutAiWindow(opts);
     return true;
   });
+
+  // Window controls for the frameless (non-macOS) chrome. Each acts on the
+  // window that sent the request, so pop-outs control themselves.
+  const senderWindow = (e: Electron.IpcMainInvokeEvent) => BrowserWindow.fromWebContents(e.sender);
+  electronIpc.handle(IPC.WindowMinimize, (e) => { senderWindow(e)?.minimize(); return true; });
+  electronIpc.handle(IPC.WindowMaximizeToggle, (e) => {
+    const win = senderWindow(e);
+    if (!win) return false;
+    if (win.isMaximized()) win.unmaximize(); else win.maximize();
+    return win.isMaximized();
+  });
+  electronIpc.handle(IPC.WindowClose, (e) => { senderWindow(e)?.close(); return true; });
 }

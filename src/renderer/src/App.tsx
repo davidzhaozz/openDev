@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './state/store';
 import { FileTree } from './components/FileTree';
 import { CodeEditor } from './components/Editor';
@@ -31,6 +31,9 @@ import { PipPanel } from './panels/PipPanel';
 import { PythonPicker } from './components/PythonPicker';
 import { RunBar } from './components/RunBar';
 import { BottomBar } from './components/BottomBar';
+import { baseName, dirName, pathToFileUri, shortenHome } from '@shared/paths';
+import { WindowControls, usesFramelessChrome } from './components/WindowControls';
+import { modKey } from './platformUi';
 
 export default function App() {
   const [root, setRoot] = useState<string | undefined>();
@@ -263,7 +266,7 @@ export default function App() {
   }, [root, tabs, activeId, rightTab]);
 
   useEffect(() => {
-    const name = root ? (root.split('/').filter(Boolean).pop() || 'OpenDev IDE') : 'OpenDev IDE';
+    const name = root ? (baseName(root) || 'OpenDev IDE') : 'OpenDev IDE';
     document.title = name;
   }, [root]);
 
@@ -318,25 +321,47 @@ export default function App() {
     else if (rightTab === 'es') openEsTab();
   }, [rightTab, openSqlTab, openEsTab]);
 
-  // Listen for native menu events
-  useEffect(() => {
-    const off = window.opendev.menu.onEvent(async (action) => {
-      if (action === 'open-project') {
-        const r = await window.opendev.workspace.pick();
-        if (r) { setRoot(r); setWorkspaceRoot(r); }
-      } else if (action === 'close-project') {
-        await window.opendev.workspace.close();
-        setRoot(undefined); setWorkspaceRoot(undefined);
-      } else if (action === 'settings') {
-        setShowSettings(true);
-      } else if (action === 'new-project') {
-        // Folder picker first, then the form modal pre-filled with the dest.
-        const dest = await window.opendev.projects.pickDir();
-        if (dest) setModal('new-project', { dest });
-      }
-    });
-    return off;
+  // Menu actions, from whichever source the platform provides them.
+  const runMenuAction = useCallback(async (action: string) => {
+    if (action === 'open-project') {
+      const r = await window.opendev.workspace.pick();
+      if (r) { setRoot(r); setWorkspaceRoot(r); }
+    } else if (action === 'close-project') {
+      await window.opendev.workspace.close();
+      setRoot(undefined); setWorkspaceRoot(undefined);
+    } else if (action === 'settings') {
+      setShowSettings(true);
+    } else if (action === 'new-project') {
+      // Folder picker first, then the form modal pre-filled with the dest.
+      const dest = await window.opendev.projects.pickDir();
+      if (dest) setModal('new-project', { dest });
+    }
   }, [setWorkspaceRoot]);
+
+  // Listen for native menu events
+  useEffect(() => window.opendev.menu.onEvent(runMenuAction), [runMenuAction]);
+
+  // Only macOS has a native application menu — its frameless siblings have no
+  // menu bar to hang accelerators off, so the same four shortcuts are bound
+  // here instead. Same key combinations, same actions.
+  useEffect(() => {
+    if (!usesFramelessChrome()) return;
+    const shortcuts: Array<{ key: string; shift?: boolean; action: string }> = [
+      { key: ',', action: 'settings' },
+      { key: 'o', action: 'open-project' },
+      { key: 'n', shift: true, action: 'new-project' },
+      { key: 'w', shift: true, action: 'close-project' }
+    ];
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey) return;
+      const hit = shortcuts.find((s) => s.key === e.key.toLowerCase() && !!s.shift === e.shiftKey);
+      if (!hit) return;
+      e.preventDefault();
+      void runMenuAction(hit.action);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [runMenuAction]);
 
   useEffect(() => {
     const dismiss = () => setTabCtx(null);
@@ -488,14 +513,15 @@ export default function App() {
     );
   }
 
-  const projectName = root.split('/').filter(Boolean).pop() || 'project';
-  const projectParent = root.split('/').slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
+  const projectName = baseName(root) || 'project';
+  const projectParent = shortenHome(dirName(root));
 
   return (
     <div className="app">
       <div className="titlebar">
         <span className="title">{projectName}</span>
         <span className="path">{projectParent} · v{window.opendev.app.version()}</span>
+        {usesFramelessChrome() && <WindowControls />}
       </div>
 
       <div className="workspace">
@@ -540,7 +566,7 @@ export default function App() {
                     onDragStart={(e) => {
                       if (t.kind === 'file') {
                         e.dataTransfer.effectAllowed = 'move';
-                        e.dataTransfer.setData('text/uri-list', `file://${t.path}`);
+                        e.dataTransfer.setData('text/uri-list', pathToFileUri(t.path));
                         tabDragRef.current = { kind: 'file', id: t.id, path: t.path, startX: e.screenX, startY: e.screenY, outside: false };
                       } else if (t.kind === 'ai') {
                         e.dataTransfer.effectAllowed = 'move';
@@ -653,11 +679,11 @@ export default function App() {
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, background: 'var(--bg-0)' }}>
               {!active && (
                 <div className="empty-state">
-                  <h2>{root.split('/').filter(Boolean).pop()}</h2>
+                  <h2>{baseName(root)}</h2>
                   <p style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{root}</p>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => setModal('fuzzy')}>Find File (⌘P)</button>
-                    <button onClick={() => openTerm()}>New Terminal (⌘`)</button>
+                    <button onClick={() => setModal('fuzzy')}>Find File ({modKey()}P)</button>
+                    <button onClick={() => openTerm()}>New Terminal ({modKey()}`)</button>
                   </div>
                 </div>
               )}
@@ -838,7 +864,7 @@ export default function App() {
             </div>
             <div className="modal-list">
               {references.items.map((r, i) => {
-                const file = r.path.split('/').pop();
+                const file = baseName(r.path);
                 return (
                   <div key={i} className="modal-row" onClick={() => {
                     jumpTo(r.path, r.line, r.col);
@@ -1002,7 +1028,7 @@ function ReferencesPopover({
       </div>
       <div className="lsp-popover-list">
         {data.items.map((r, i) => {
-          const file = r.path.split('/').pop();
+          const file = baseName(r.path);
           return (
             <div key={i} className="lsp-popover-row" onClick={() => onJump(r)}>
               <span className="lsp-popover-file">{file}</span>

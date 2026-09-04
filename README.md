@@ -113,6 +113,33 @@ npm run dist:dir       # unpacked .app only (faster, for testing)
 
 The build is unsigned by default. To ship it to other machines you'll want to set up an Apple Developer ID; see `electron-builder.yml` for the entitlements and notarization knobs.
 
+### Windows
+
+```bash
+npm run dist:win       # produces dist/OpenDev IDE-<version>-x64.exe (NSIS + portable)
+```
+
+Must be run **on** Windows — `keytar` and `@vscode/ripgrep` are per-platform
+natives, so cross-packaging from a Mac yields an installer that breaks at the
+first search. `.github/workflows/build.yml` does it on a `windows-latest`
+runner and uploads the installer as an artifact; the same workflow runs
+`scripts/smoke-headless.mjs`, which exercises the real main process — ports,
+PTY, git, ripgrep, Python detection — on Windows and macOS both.
+
+See **[WINDOWS.md](WINDOWS.md)** for what's platform-specific and why.
+
+### Run it in a browser
+
+```bash
+npm run web            # builds, serves, and opens http://127.0.0.1:5199/?token=…
+```
+
+Same IDE, same code, served over a WebSocket instead of Electron IPC — so you
+can drive a workstation's filesystem, terminal, and services from a laptop or
+tablet. See **[WEB.md](WEB.md)** for the architecture, the handful of things
+that behave differently in a browser, and the security model (token auth,
+loopback by default, no TLS of its own).
+
 ### Smoke test
 
 ```bash
@@ -171,7 +198,7 @@ Right side panel → **DB** → ➕. Each profile holds host, port, user, databa
 
 ## Architecture (one paragraph)
 
-Electron app: **main** process owns workspace state, subprocess management (TypeScript LSP, ripgrep, Claude CLI, `node-pty`), DB pools, and the MCP HTTP server. **Renderer** is React + Zustand, talks to main exclusively through Electron's `contextBridge`. **Webviews** isolate user content (dev servers, embedded HTTP UIs) with `nodeIntegration: false`. Long-running data sources (PTY, AI streams, service logs, DB results) are all capped and back-pressured at the main-process boundary so the renderer can't be drowned. IPC channels are namespaced (`fs:read`, `ai:send`, `db:query`, etc.) and typed end-to-end via `src/shared/`.
+Electron app: **main** process owns workspace state, subprocess management (TypeScript LSP, ripgrep, Claude CLI, `node-pty`), DB pools, and the MCP HTTP server. **Renderer** is React + Zustand, talks to main exclusively through Electron's `contextBridge`. **Webviews** isolate user content (dev servers, embedded HTTP UIs) with `nodeIntegration: false`. Long-running data sources (PTY, AI streams, service logs, DB results) are all capped and back-pressured at the main-process boundary so the renderer can't be drowned. IPC channels are namespaced (`fs:read`, `ai:send`, `db:query`, etc.) and typed end-to-end via `src/shared/`. The **web build** (`src/server/`, `src/web/`) reuses main, preload, and renderer verbatim: it swaps the `electron` module for a shim on both ends and carries the same IPC channels over a WebSocket — see [WEB.md](WEB.md). Everything platform-specific — executable lookup, shells, process trees, port enumeration — is isolated in `src/main/platform.ts`, and path-string handling shared between processes in `src/shared/paths.ts`; see [WINDOWS.md](WINDOWS.md).
 
 ---
 
@@ -179,7 +206,7 @@ Electron app: **main** process owns workspace state, subprocess management (Type
 
 The current focus is hardening the things that already exist — packaging, memory limits, polish. Likely directions from here:
 
-- Windows / Linux support
+- Linux support (the code takes the non-macOS branch already; nothing has run there)
 - Light theme
 - More device viewport presets + UA spoofing
 - Per-workspace MCP tool allowlists

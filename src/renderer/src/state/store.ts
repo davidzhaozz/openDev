@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ChatAttachment, ChatMessage, Conversation, DbColumn, DebugLang, DebugStatus, RestRequestSpec, RestResult, ServiceDef, ServiceRuntime, StackFrame } from '../../../shared/types';
+import { baseName } from '@shared/paths';
 
 // Renderer-side memory caps. Kept in sync with src/main/limits.ts — the
 // main process is authoritative but we re-cap here so a runaway stream
@@ -305,7 +306,7 @@ export const useStore = create<Store>((set, get) => ({
     const existing = s.centerTabs.find(t => t.kind === 'file' && t.path === path);
     if (existing) return { activeCenterId: existing.id };
     const id = nextTabId();
-    const name = path.split('/').pop() || path;
+    const name = baseName(path) || path;
     const tab: CenterTab = { kind: 'file', id, path, name, content, modified: false };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
   }),
@@ -313,7 +314,7 @@ export const useStore = create<Store>((set, get) => ({
     const id = nextTabId();
     const cwd = opts?.cwd || s.workspaceRoot || '/';
     const fallbackName = `Terminal ${s.centerTabs.filter(t => t.kind === 'terminal').length + 1}`;
-    const name = opts?.name || (opts?.cwd ? (opts.cwd.split('/').filter(Boolean).pop() || fallbackName) : fallbackName);
+    const name = opts?.name || (opts?.cwd ? (baseName(opts.cwd) || fallbackName) : fallbackName);
     const tab: CenterTab = { kind: 'terminal', id, name, cwd };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
   }),
@@ -380,7 +381,7 @@ export const useStore = create<Store>((set, get) => ({
   },
   openDiffTab: (opts) => set((s) => {
     const id = nextTabId();
-    const file = opts.filePath.split('/').pop() || 'diff';
+    const file = baseName(opts.filePath) || 'diff';
     const name = opts.hash ? `${file} @ ${opts.hash.slice(0, 7)}` : `${file} (diff)`;
     const tab: CenterTab = { kind: 'diff', id, name, filePath: opts.filePath, hash: opts.hash, diff: opts.diff };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
@@ -418,7 +419,7 @@ export const useStore = create<Store>((set, get) => ({
   })),
   openDesignProposalsTab: (opts) => {
     const id = nextTabId();
-    const name = opts.name || (opts.targetPath ? `Designs · ${opts.targetPath.split('/').pop()}` : 'Designs');
+    const name = opts.name || (opts.targetPath ? `Designs · ${baseName(opts.targetPath)}` : 'Designs');
     const tab: CenterTab = { kind: 'design-proposals', id, name, proposals: opts.proposals, targetPath: opts.targetPath };
     set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
     return id;

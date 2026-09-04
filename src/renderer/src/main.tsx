@@ -4,6 +4,12 @@ import { Popout } from './Popout';
 import { PopoutAi } from './PopoutAi';
 import './styles/global.css';
 
+// The stylesheet needs to know whether to reserve room for macOS traffic
+// lights. Stamped before the first render so there's no reflow.
+try {
+  document.documentElement.dataset.platform = window.opendev?.app?.platform?.() ?? 'darwin';
+} catch { /* the missing-bridge screen below reports the real problem */ }
+
 const root = createRoot(document.getElementById('root')!);
 const params = new URLSearchParams(location.search);
 const popoutFlag = params.get('popout');

@@ -6,6 +6,7 @@ import { IPC } from '@shared/ipc';
 import type { CreateProjectArgs, CreateProjectResult, ProjectTemplate } from '@shared/types';
 import { safeSend } from './safeSend.js';
 import { resolveBinPath } from './ai.js';
+import { spawnBin } from './platform.js';
 
 // New-project wizard. Two kinds of templates:
 //   - 'inline'  → write a fixed set of files to disk (small starter projects).
@@ -303,7 +304,7 @@ function runStreamed(cmdName: string, args: string[], cwd: string): Promise<{ co
       return;
     }
     logLine(`$ ${cmdName} ${args.join(' ')}`);
-    const proc = spawn(resolved, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+    const proc = spawnBin(resolved, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
     proc.stdout?.on('data', (b: Buffer) => logLine(b.toString('utf8')));
     proc.stderr?.on('data', (b: Buffer) => logLine(b.toString('utf8')));
     proc.on('error', (err) => { logLine(`[spawn error] ${err.message}`); resolveP({ code: -1 }); });

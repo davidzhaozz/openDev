@@ -9,6 +9,8 @@ import { loadSettings } from './storage.js';
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { LIMITS, tail } from './limits.js';
+import { resolveBinPath, spawnBin } from './platform.js';
+import { isAbsolutePath } from '@shared/paths';
 
 // AI-response accumulator that caps the final assistant text. Once we
 // exceed the cap we stop concatenating and just remember that we did —
@@ -60,25 +62,11 @@ function convPath(id: string): string | null {
   return dir ? join(dir, `${id}.json`) : null;
 }
 
-// Resolve a CLI name (e.g. "claude") to an absolute path by walking PATH +
-// common user bin dirs. We do our own walk instead of trusting spawn's PATH
-// lookup because Finder-launched .app processes get a minimal PATH, and
-// `hydrateShellPath` (called at startup) can silently fail on weird shell
-// setups — surfacing "not found" with the PATH we searched is far more
-// useful than ENOENT bubbling up as "[claude cli exited -2]".
-export function resolveBinPath(nameOrPath: string): string | null {
-  // Already absolute — trust it (let spawn surface any access errors).
-  if (nameOrPath.startsWith('/')) return existsSync(nameOrPath) ? nameOrPath : null;
-  const home = process.env.HOME || '';
-  const extras = home ? [`${home}/.local/bin`, `${home}/.bun/bin`, `${home}/.volta/bin`, `${home}/.cargo/bin`] : [];
-  const dirs = [...(process.env.PATH || '').split(':'), ...extras];
-  for (const d of dirs) {
-    if (!d) continue;
-    const p = `${d}/${nameOrPath}`;
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
+// Resolve a CLI name (e.g. "claude") to an absolute path. The walk itself is
+// platform-specific — Windows has to try PATHEXT, since `claude`, `npm` and
+// `tsx` are all `.cmd` shims there — so it lives in platform.ts. Re-exported
+// here because this is where the rest of main/ has always imported it from.
+export { resolveBinPath };
 
 async function listConversations(): Promise<Conversation[]> {
   const dir = convDir();
@@ -400,7 +388,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     if (k === 'NODE_OPTIONS') continue;
     childEnv[k] = v;
   }
-  const proc = spawn(claudeBin, args, {
+  const proc = spawnBin(claudeBin, args, {
     cwd,
     env: childEnv,
     // Always pipe stdin so we can stream the prompt in — see the comment
@@ -676,7 +664,7 @@ async function streamViaCodexCli(streamId: string, text: string, conv: Conversat
   // As of codex-cli 0.130, stdout is the clean final answer and stderr
   // carries the banner / prompt-echo / "tokens used" noise — so we stream
   // stdout straight to the chat and keep stderr only for diagnostics.
-  const proc = spawn(codexBin, ['exec', '--skip-git-repo-check', text], {
+  const proc = spawnBin(codexBin, ['exec', '--skip-git-repo-check', text], {
     cwd,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe']
@@ -750,13 +738,13 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   // binary is an 'error' event AND a 'close' event with libuv's negative
   // ENOENT code (-2), which produces two confusing log lines. Catching it
   // here lets us emit one clean error and skip the broken spawn entirely.
-  if (configured.startsWith('/') && !existsSync(configured)) {
+  if (isAbsolutePath(configured) && !existsSync(configured)) {
     const msg = `\n[opencode] No file at "${configured}".\n` +
       `Update Settings → Local AI → OpenCode binary. Either click Browse… to pick the actual binary, or paste the full path (e.g. ~/Desktop/repo/OpenCode/target/release/opencode).\n`;
     safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
     return;
   }
-  if (!configured.startsWith('/') && !resolveBinPath(configured)) {
+  if (!isAbsolutePath(configured) && !resolveBinPath(configured)) {
     const msg = `\n[opencode] Binary "${configured}" not found on PATH.\n` +
       `PATH searched: ${process.env.PATH}\n` +
       `Either put opencode on your PATH or set an absolute path in Settings → Local AI → OpenCode binary (Browse…).\n`;
@@ -788,7 +776,7 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   safeSend(IPC.AiStream, { streamId, chunk: startBanner, done: false });
 
   console.log(`[opencode] spawn ${bin} ${displayArgs} <question> in ${cwd} (q=${text.length} chars)`);
-  const proc = spawn(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawnBin(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   activeStreams.set(streamId, proc);
   const startedAt = Date.now();
   const acc = makeResponseAcc();

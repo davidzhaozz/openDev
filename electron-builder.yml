@@ -7,19 +7,35 @@ directories:
 files:
   - out/**/*
   - package.json
-  # The main bundle gets everything via Rollup, so node_modules is excluded
-  # by default to keep the DMG small. The LSP servers are the exception:
-  # they spawn as separate processes and must exist as real files on disk
-  # (can't run JS from inside the asar bundle).
-  - "!node_modules/**/*"
-  - "node_modules/typescript-language-server/**/*"
-  - "node_modules/typescript/**/*"
-  - "node_modules/pyright/**/*"
+  # Do NOT exclude node_modules here. electron-vite runs externalizeDepsPlugin(),
+  # which leaves every runtime dependency as a bare import in out/main/index.js
+  # rather than bundling it — so the main process resolves @vscode/ripgrep,
+  # simple-git, ws, keytar, node-pty, pg, mysql2 &c. from node_modules at
+  # startup. Excluding them produced ERR_MODULE_NOT_FOUND on launch.
+  # electron-builder already ships only production deps and drops devDependencies.
+  #
+  # node-gyp leaves behind a symlink to the temporary Python it compiled with.
+  # That target gets cleaned up, and electron-builder stat()s every file it
+  # packages — a dangling symlink aborts the whole build with ENOENT. Nothing
+  # at runtime needs it, and `npm rebuild` can recreate it, so exclude it.
+  - "!node_modules/node-pty/build/node_gyp_bins/**"
+  # Debug symbols for the prebuilt natives — ~28 MB that nothing reads at
+  # runtime. Excluded so the Windows installer isn't needlessly fat.
+  - "!node_modules/**/*.pdb"
 asarUnpack:
   - "**/*.node"
-  # The TS language server is JS, but it has to be reachable as a file on
-  # disk so we can spawn it via Electron-as-Node — can't run code from
-  # inside the asar bundle.
+  # node-pty needs more than its .node files on Windows: ConPTY loads
+  # conpty.dll and spawns OpenConsole.exe, and the winpty fallback spawns
+  # winpty-agent.exe. None of those can be loaded or executed from inside the
+  # asar, so the whole package is unpacked.
+  - "node_modules/node-pty/**/*"
+  # These spawn as separate processes, so they must exist as real files on
+  # disk — code can't be executed from inside the asar bundle.
+  # @vscode/ripgrep 1.18 moved the binary into per-platform sibling packages
+  # (@vscode/ripgrep-darwin-arm64, -win32-x64, …), so the glob has to reach
+  # those too — otherwise `rg` ends up inside the asar, where it can't run and
+  # find-in-files silently returns nothing.
+  - "node_modules/@vscode/ripgrep*/**/*"
   - "node_modules/typescript-language-server/**/*"
   - "node_modules/typescript/**/*"
   - "node_modules/vscode-jsonrpc/**/*"
@@ -31,15 +47,17 @@ mac:
     - target: dmg
       arch:
         - arm64
-  # Hardened runtime requires a real Developer ID signature. On an ad-hoc
-  # signed bundle it can cause macOS to disregard Info.plist privacy keys
-  # (Local Network never prompts) and silently drop capability requests.
-  # Once we have a signing identity, flip this back to true.
-  hardenedRuntime: false
+  # Signed with the Developer ID "QIN YU Zhao (33MB7ZRNH7)". Hardened runtime is
+  # required for notarization; the entitlements below re-open what it locks down
+  # (JIT, unsigned exec memory, library validation) so Electron/V8 still run.
+  hardenedRuntime: true
   gatekeeperAssess: false
-  identity: null
+  identity: "QIN YU Zhao (33MB7ZRNH7)"
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Notarization is done separately on the built DMG via
+  # `xcrun notarytool ... --keychain-profile drillforge-notary` (keeps the
+  # app-specific password out of the repo/env).
   notarize: false
   extendInfo:
     # macOS Sequoia (15) silently drops unicast traffic to local-network IPs
@@ -52,6 +70,28 @@ mac:
       - _https._tcp
       - _postgresql._tcp
       - _mysql._tcp
+win:
+  # NSIS installer for normal use, plus a portable .exe for machines where the
+  # user can't run an installer (locked-down corporate images, quick tests on
+  # a throwaway VM). Both are x64; Windows-on-ARM runs x64 under emulation.
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # Unsigned. Windows SmartScreen will warn on first run until these are signed
+  # with an EV or OV code-signing certificate — set CSC_LINK / CSC_KEY_PASSWORD
+  # in the environment to sign at build time.
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OpenDev IDE
 dmg:
   contents:
     - x: 130

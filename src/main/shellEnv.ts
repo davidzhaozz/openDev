@@ -1,19 +1,38 @@
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
+import { homedir } from 'os';
+import { delimiter, join } from 'path';
 
 let resolved = false;
 
-const COMMON_BINS = [
-  '/opt/homebrew/bin',
-  '/opt/homebrew/sbin',
-  '/usr/local/bin',
-  '/usr/local/sbin',
-  `${process.env.HOME}/.nvm/versions/node/current/bin`,
-  `${process.env.HOME}/.volta/bin`,
-  `${process.env.HOME}/.bun/bin`,
-  `${process.env.HOME}/.cargo/bin`,
-  `${process.env.HOME}/.local/bin`
-];
+// Where package managers put things that a GUI-launched process won't have on
+// PATH. macOS: a Finder-launched .app starts with /usr/bin:/bin:/usr/sbin:/sbin.
+// Windows: Explorer gives the full user PATH, but nvm-windows, Scoop and a
+// per-user npm prefix are all common enough to be worth adding blind.
+function commonBinDirs(): string[] {
+  const home = homedir();
+  if (process.platform === 'win32') {
+    return [
+      join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+      join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'npm'),
+      join(process.env.ProgramData || 'C:\\ProgramData', 'chocolatey', 'bin'),
+      join(home, 'scoop', 'shims'),
+      join(home, '.cargo', 'bin'),
+      join(home, 'AppData', 'Local', 'Microsoft', 'WindowsApps')
+    ];
+  }
+  return [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    join(home, '.nvm', 'versions', 'node', 'current', 'bin'),
+    join(home, '.volta', 'bin'),
+    join(home, '.bun', 'bin'),
+    join(home, '.cargo', 'bin'),
+    join(home, '.local', 'bin')
+  ];
+}
 
 function dedupePath(parts: string[]): string {
   const seen = new Set<string>();
@@ -23,7 +42,7 @@ function dedupePath(parts: string[]): string {
     seen.add(p);
     out.push(p);
   }
-  return out.join(':');
+  return out.join(delimiter);
 }
 
 function pathFromLoginShell(): string | null {
@@ -49,11 +68,11 @@ export function hydrateShellPath(): void {
   resolved = true;
   const original = process.env.PATH ?? '';
   const loginPath = pathFromLoginShell();
-  const fallback = COMMON_BINS.filter(p => p && existsSync(p));
+  const fallback = commonBinDirs().filter(p => p && existsSync(p));
   const merged = dedupePath([
-    ...(loginPath ? loginPath.split(':') : []),
+    ...(loginPath ? loginPath.split(delimiter) : []),
     ...fallback,
-    ...original.split(':')
+    ...original.split(delimiter)
   ]);
   process.env.PATH = merged;
   if (process.env.OPENDEV_VERBOSE === '1') {

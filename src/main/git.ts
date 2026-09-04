@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
 import type { GitFileStatus, WorktreeInfo } from '@shared/types';
 import { workspace, requireRoot } from './workspace.js';
+import { baseName, dirName } from '@shared/paths';
 
 let gitInstance: SimpleGit | null = null;
 let gitRoot: string | undefined;
@@ -113,8 +114,8 @@ export function registerGitIpc() {
 
   ipcMain.handle(IPC.GitBlame, async (_e, filePath: string) => {
     try {
-      const dir = filePath.split('/').slice(0, -1).join('/');
-      const file = filePath.split('/').pop()!;
+      const dir = dirName(filePath);
+      const file = baseName(filePath);
       const g = simpleGit(dir);
       const raw = await g.raw(['blame', '--porcelain', '--', file]);
       type Entry = { hash: string; author?: string; authorTime?: number; summary?: string };
@@ -158,8 +159,8 @@ export function registerGitIpc() {
 
   ipcMain.handle(IPC.GitFileLog, async (_e, filePath: string, limit = 100) => {
     try {
-      const dir = filePath.split('/').slice(0, -1).join('/');
-      const file = filePath.split('/').pop()!;
+      const dir = dirName(filePath);
+      const file = baseName(filePath);
       const g = simpleGit(dir);
       const log = await g.log({ file, maxCount: limit, '--follow': null });
       return { commits: log.all };

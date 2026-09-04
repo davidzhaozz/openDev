@@ -60,6 +60,7 @@ function computeCpuPct(): number {
 // compressed. Inactive + speculative + free are all available headroom.
 
 const isDarwin = platform() === 'darwin';
+const isWindows = platform() === 'win32';
 let lastDarwinUsedBytes: number | null = null;
 
 // File-descriptor accounting. Soft limit is probed once via `ulimit -Sn`
@@ -69,6 +70,9 @@ let lastDarwinUsedBytes: number | null = null;
 // applies at runtime so the user knows their actual ceiling.
 let fdLimit = 0;
 function probeFdLimit(): void {
+  // Windows has handles, not file descriptors, and no RLIMIT_NOFILE to read.
+  // Leaving both count and limit at 0 makes the renderer hide the pill.
+  if (isWindows) return;
   execFile('/bin/sh', ['-c', 'ulimit -Sn'], { timeout: 1500 }, (err, stdout) => {
     if (err) return;
     const n = parseInt(String(stdout).trim(), 10);
@@ -84,6 +88,7 @@ function probeFdLimit(): void {
 let gpuCount = 0;
 let gpuCores = 0;
 function probeGpuInfo(): void {
+  if (isWindows) return probeGpuInfoWindows();
   if (!isDarwin) return;
   execFile('/usr/sbin/system_profiler', ['SPDisplaysDataType'], { timeout: 4000 }, (err, stdout) => {
     if (err || !stdout) return;
@@ -103,11 +108,26 @@ function probeGpuInfo(): void {
   });
 }
 
+// Windows exposes adapters through CIM; there is no per-GPU core count to
+// read, so only the adapter count is reported and the renderer renders
+// "GPU 1" / "GPU 2×" instead of a core figure.
+function probeGpuInfoWindows(): void {
+  execFile('powershell', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    '(Get-CimInstance Win32_VideoController | Measure-Object).Count'
+  ], { timeout: 6000, windowsHide: true }, (err, stdout) => {
+    if (err || !stdout) return;
+    const n = parseInt(String(stdout).trim(), 10);
+    if (Number.isFinite(n) && n > 0) gpuCount = n;
+  });
+}
+
 function readFdCount(): number {
   // On Linux/macOS, /dev/fd is a per-process view of open descriptors.
   // readdirSync briefly opens one extra fd (for the readdir itself) but
   // releases it on return — the count is accurate at the moment of
   // sampling. On platforms without /dev/fd, fall back to 0.
+  if (isWindows) return 0;
   try { return readdirSync('/dev/fd').length; }
   catch { return 0; }
 }

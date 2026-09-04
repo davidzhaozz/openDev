@@ -1,5 +1,22 @@
 import { BrowserWindow, app } from 'electron';
 import { join } from 'path';
+import { IPC } from '@shared/ipc';
+
+// Mirrors the main window: traffic lights on macOS, frameless everywhere else
+// (see windowChromeOptions in index.ts for why a native overlay isn't used).
+function chrome(): Electron.BrowserWindowConstructorOptions {
+  if (process.platform === 'darwin') {
+    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 } };
+  }
+  return { frame: false };
+}
+
+function wireMaximizeEvents(win: BrowserWindow): void {
+  const send = () => win.webContents.send(IPC.WindowMaximizedChanged, win.isMaximized());
+  win.on('maximize', send);
+  win.on('unmaximize', send);
+}
+import { baseName } from '@shared/paths';
 
 export function createPopoutWindow(path: string) {
   // Use app.getAppPath() (the path to the asar bundle in packaged builds,
@@ -20,7 +37,7 @@ export function createPopoutWindow(path: string) {
     backgroundColor: '#00000000',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 14 },
-    title: path.split('/').pop() || 'OpenDev IDE',
+    title: baseName(path) || 'OpenDev IDE',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -30,6 +47,7 @@ export function createPopoutWindow(path: string) {
     }
   });
   win.on('ready-to-show', () => win.show());
+  wireMaximizeEvents(win);
   const devUrl = process.env['ELECTRON_RENDERER_URL'];
   const q = `popout=1&path=${encodeURIComponent(path)}`;
   if (devUrl) {
@@ -52,8 +70,7 @@ export function createPopoutAiWindow(opts: { conversationId?: string; name?: str
     show: false,
     transparent: true,
     backgroundColor: '#00000000',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
+    ...chrome(),
     title: opts.name || 'AI Chat',
     webPreferences: {
       preload: preloadPath,
@@ -64,6 +81,7 @@ export function createPopoutAiWindow(opts: { conversationId?: string; name?: str
     }
   });
   win.on('ready-to-show', () => win.show());
+  wireMaximizeEvents(win);
   const devUrl = process.env['ELECTRON_RENDERER_URL'];
   const params = new URLSearchParams();
   params.set('popout', 'ai');

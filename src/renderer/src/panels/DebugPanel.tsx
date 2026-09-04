@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import type { DebugVar, Scope } from '../../../shared/types';
+import { baseName } from '@shared/paths';
 
 // The "DEBUG" right-panel tab — call stack, variables (lazy-expanded scopes),
 // watch, breakpoints, console. The global debug event subscription that
@@ -110,7 +111,7 @@ export function DebugPanel() {
                 }}
               >
                 <span className="frame-name">{f.name}</span>
-                <span className="frame-loc">{f.path?.split('/').pop() ?? '<anon>'}:{f.line}</span>
+                <span className="frame-loc">{f.path ? baseName(f.path) : '<anon>'}:{f.line}</span>
               </div>
             ))}
           </div>
@@ -177,7 +178,7 @@ export function DebugPanel() {
           <div key={`${b.path}:${b.line}:${i}`} className="bp-row">
             <span className="bp-dot" />
             <span className="bp-loc" onClick={() => setPendingJump({ path: b.path, line: b.line - 1, col: 0 })}>
-              {b.path.split('/').pop()}:{b.line}
+              {baseName(b.path)}:{b.line}
             </span>
             <button className="bp-x" onClick={() => toggleBreakpoint(b.path, b.line)} title="Remove">✕</button>
           </div>

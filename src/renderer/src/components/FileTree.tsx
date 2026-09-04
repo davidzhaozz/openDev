@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FileNode } from '../../../shared/types';
 import { useStore } from '../state/store';
+import { baseName, dirName } from '@shared/paths';
 
 type FlatRow = { node: FileNode; depth: number };
 
@@ -43,7 +44,7 @@ export function FileTree({ root, onOpen }: Props) {
 
   useEffect(() => {
     const off = window.opendev.fs.onWatch((ev) => {
-      const parent = ev.path.split('/').slice(0, -1).join('/');
+      const parent = dirName(ev.path);
       // Refresh any directory we've already loaded — keeps cached children
       // honest with what's on disk after rename/create/delete.
       if (childrenCache[parent]) loadDir(parent);
@@ -107,7 +108,7 @@ export function FileTree({ root, onOpen }: Props) {
       const out: string[] = [];
       let cur = target;
       while (cur && cur !== root && cur.length > root.length) {
-        const parent = cur.split('/').slice(0, -1).join('/');
+        const parent = dirName(cur);
         if (!parent) break;
         out.push(parent);
         cur = parent;
@@ -202,7 +203,7 @@ export function FileTree({ root, onOpen }: Props) {
     // helper. We synthesize gitInfo on the root node here.
     (async () => {
       try {
-        const parent = root.split('/').slice(0, -1).join('/');
+        const parent = dirName(root);
         const siblings = parent ? await window.opendev.fs.list(parent) : [];
         const me = siblings.find(s => s.path === root);
         if (alive) setRootGitInfo(me?.gitInfo);
@@ -212,7 +213,7 @@ export function FileTree({ root, onOpen }: Props) {
   }, [root]);
 
   const rows: FlatRow[] = [];
-  const rootNode: FileNode = { name: root.split('/').pop() || root, path: root, isDir: true, gitInfo: rootGitInfo };
+  const rootNode: FileNode = { name: baseName(root) || root, path: root, isDir: true, gitInfo: rootGitInfo };
   function walk(node: FileNode, depth: number) {
     rows.push({ node, depth });
     if (node.isDir && expanded.has(node.path)) {
@@ -296,7 +297,7 @@ export function FileTree({ root, onOpen }: Props) {
               showToast(`Switched ${branchPicker.name} to ${branch}`, 2500);
               setBranchPicker(null);
               // Refresh tree to update git label
-              const parent = branchPicker.path.split('/').slice(0, -1).join('/');
+              const parent = dirName(branchPicker.path);
               if (parent) loadDir(parent);
             } else {
               showToast(`Checkout failed: ${r.error}`, 5000);
@@ -348,7 +349,7 @@ export function FileTree({ root, onOpen }: Props) {
           <div className="item" onClick={() => {
             const node = ctx.node;
             setCtx(null);
-            const dir = node.isDir ? node.path : node.path.split('/').slice(0, -1).join('/');
+            const dir = node.isDir ? node.path : dirName(node.path);
             setNamePrompt({
               title: 'New file',
               initial: '',
@@ -366,7 +367,7 @@ export function FileTree({ root, onOpen }: Props) {
           <div className="item" onClick={() => {
             const node = ctx.node;
             setCtx(null);
-            const dir = node.isDir ? node.path : node.path.split('/').slice(0, -1).join('/');
+            const dir = node.isDir ? node.path : dirName(node.path);
             setNamePrompt({
               title: 'New folder',
               initial: '',
@@ -385,7 +386,7 @@ export function FileTree({ root, onOpen }: Props) {
           <div className="item" onClick={() => {
             const node = ctx.node;
             setCtx(null);
-            const dir = node.path.split('/').slice(0, -1).join('/');
+            const dir = dirName(node.path);
             setNamePrompt({
               title: `Rename ${node.isDir ? 'folder' : 'file'}`,
               initial: node.name,
@@ -406,13 +407,13 @@ export function FileTree({ root, onOpen }: Props) {
               ? [...selected]
               : [ctx.node.path];
             const label = paths.length === 1
-              ? paths[0].split('/').pop() || paths[0]
+              ? baseName(paths[0]) || paths[0]
               : `${paths.length} items`;
             if (!confirm(`Delete ${label}?`)) return setCtx(null);
             const dirs = new Set<string>();
             for (const p of paths) {
               try { await window.opendev.fs.delete(p); } catch (e: any) { showToast(`Delete failed: ${e?.message || e}`, 4000); }
-              dirs.add(p.split('/').slice(0, -1).join('/'));
+              dirs.add(dirName(p));
             }
             for (const d of dirs) loadDir(d);
             setSelected(new Set());

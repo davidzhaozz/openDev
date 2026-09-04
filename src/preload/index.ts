@@ -87,6 +87,10 @@ const versionInfo: { version: string } = (() => {
 const api = {
   app: {
     version: () => versionInfo.version,
+    // Drives the platform-specific chrome: macOS has native traffic lights
+    // and an app menu, every other platform needs the renderer to draw its
+    // own window controls and bind its own menu accelerators.
+    platform: (): NodeJS.Platform => process.platform,
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.AppRelaunch)
   },
   workspace: {
@@ -354,7 +358,11 @@ const api = {
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path),
     popoutAi: (opts?: { conversationId?: string; name?: string; initialPrompt?: string }): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {})
+      ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {}),
+    minimize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMinimize),
+    toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMaximizeToggle),
+    close: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowClose),
+    onMaximizedChanged: (cb: (maximized: boolean) => void) => on(IPC.WindowMaximizedChanged, cb)
   },
   tools: {
     check: (): Promise<{ npm: boolean; node: boolean; brew: boolean; git: boolean; npmVersion?: string; nodeVersion?: string }> =>

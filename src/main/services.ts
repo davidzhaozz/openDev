@@ -2,20 +2,36 @@ import { ipcMain } from 'electron';
 import { spawn, exec, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { promises as fs } from 'fs';
-import { join, resolve, isAbsolute, basename } from 'path';
+import { join, resolve, isAbsolute, basename, delimiter } from 'path';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
 import type { ServiceDef, ServiceRuntime, ServiceStatus } from '@shared/types';
 import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
-import { freePort } from './ports.js';
+import { freePort, listListeningPorts } from './ports.js';
+import { IS_WIN, commandShell, descendantPids, detachedSpawnOptions, killTree } from './platform.js';
 import { safeSend } from './safeSend.js';
+import { baseName, isWithin } from '@shared/paths';
 
 const pexec = promisify(exec);
 
-async function listeningPortsForPgid(pgid: number): Promise<number[]> {
+// Which ports is this service actually holding? On POSIX the spawned shell
+// and its children share a process group, so lsof can filter by it directly.
+// Windows has no equivalent, so we walk the parent/child links and match the
+// listener table against that PID set.
+async function listeningPortsForService(rootPid: number): Promise<number[]> {
+  if (IS_WIN) {
+    try {
+      const pids = new Set(await descendantPids(rootPid));
+      const listeners = await listListeningPorts();
+      const ports = new Set(listeners.filter((l) => pids.has(l.pid)).map((l) => l.port));
+      return [...ports].sort((a, b) => a - b);
+    } catch {
+      return [];
+    }
+  }
   try {
-    const { stdout } = await pexec(`lsof -nP -iTCP -sTCP:LISTEN -a -g ${pgid} -F n`, { timeout: 1500, maxBuffer: 2 * 1024 * 1024 });
+    const { stdout } = await pexec(`lsof -nP -iTCP -sTCP:LISTEN -a -g ${rootPid} -F n`, { timeout: 1500, maxBuffer: 2 * 1024 * 1024 });
     const ports = new Set<number>();
     for (const line of stdout.split('\n')) {
       if (!line.startsWith('n')) continue;
@@ -122,11 +138,11 @@ class ServiceManager {
     const root = workspace.getRoot();
     if (!root) throw new Error('No workspace');
     const norm = absPath.replace(/\/+$/, '');
-    if (norm !== root && !norm.startsWith(root + '/')) throw new Error('Path outside workspace');
+    if (!isWithin(norm, root)) throw new Error('Path outside workspace');
     const cwd = norm === root ? '.' : norm.slice(root.length + 1);
     // Always use the folder name — package.json's `name` is often scoped/internal
     // and doesn't match what you'd recognize in the services list.
-    const name = cwd === '.' ? root.split('/').pop() || 'service' : cwd.split('/').pop() || cwd;
+    const name = cwd === '.' ? baseName(root) || 'service' : baseName(cwd) || cwd;
 
     const has = async (f: string): Promise<boolean> => {
       try { await fs.access(join(norm, f)); return true; } catch { return false; }
@@ -276,16 +292,18 @@ class ServiceManager {
       } catch { /* keep going — start() may still succeed on a different port */ }
     }
 
-    log.push(`[opendev] $ ${def.command}\n[opendev] cwd: ${cwd}\n[opendev] PATH=${(process.env.PATH || '').split(':').slice(0, 6).join(':')}…\n`);
-    // detached:true puts the shell + children into a new process group so we
-    // can signal the whole tree on shutdown. Without this, killing the wrapping
-    // shell leaves npm/tsx/node orphans bound to dev ports.
+    log.push(`[opendev] $ ${def.command}\n[opendev] cwd: ${cwd}\n[opendev] PATH=${(process.env.PATH || '').split(delimiter).slice(0, 6).join(delimiter)}…\n`);
+    // On POSIX, detached:true puts the shell + children into a new process
+    // group so we can signal the whole tree on shutdown — without it, killing
+    // the wrapping shell leaves npm/tsx/node orphans bound to dev ports. On
+    // Windows detached would open a console window per service, so the tree is
+    // walked by taskkill at stop time instead (see platform.killTree).
     const proc = spawn(def.command, {
       cwd,
-      shell: true,
-      detached: true,
+      shell: commandShell(),
       env: { ...process.env, FORCE_COLOR: '1', ...def.env },
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...detachedSpawnOptions()
     });
     runtime.pid = proc.pid;
     this.runtimes.set(id, { proc, runtime, log });
@@ -366,16 +384,16 @@ class ServiceManager {
     const r = this.runtimes.get(id);
     if (!r) return;
     const pid = r.proc.pid;
-    const killGroup = (sig: NodeJS.Signals) => {
-      try { if (pid) process.kill(-pid, sig); }
-      catch { try { r.proc.kill(sig); } catch {} }
+    const kill = async (force: boolean) => {
+      if (pid) await killTree(pid, force);
+      else { try { r.proc.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch { /* already gone */ } }
     };
-    if (r.proc.exitCode == null) killGroup('SIGTERM');
+    if (r.proc.exitCode == null) await kill(false);
 
     const waitMs = opts.waitMs ?? 4000;
     await new Promise<void>((resolve) => {
       if (r.proc.exitCode != null) return resolve();
-      const t = setTimeout(() => { killGroup('SIGKILL'); resolve(); }, waitMs);
+      const t = setTimeout(() => { void kill(true).then(resolve); }, waitMs);
       r.proc.once('exit', () => { clearTimeout(t); resolve(); });
     });
   }
@@ -406,7 +424,7 @@ class ServiceManager {
     await Promise.all([...this.runtimes.entries()].map(async ([id, r]) => {
       if (r.runtime.status !== 'running' && r.runtime.status !== 'starting') return;
       if (!r.proc.pid) return;
-      const ports = await listeningPortsForPgid(r.proc.pid);
+      const ports = await listeningPortsForService(r.proc.pid);
       if (ports.length) out[id] = ports;
     }));
     return out;
@@ -441,35 +459,25 @@ class ServiceManager {
     //    once the shell exits the lsof query loses the group context.
     const portsByService: number[][] = await Promise.all(entries.map(async ([, r]) => {
       if (!r.proc.pid) return [];
-      try { return await listeningPortsForPgid(r.proc.pid); }
+      try { return await listeningPortsForService(r.proc.pid); }
       catch { return []; }
     }));
 
-    // 2) SIGKILL each process group immediately. No grace period.
-    for (const [, r] of entries) {
+    // 2) Hard-kill each tree immediately. No grace period.
+    await Promise.all(entries.map(async ([, r]) => {
       const pid = r.proc.pid;
-      try { if (pid) process.kill(-pid, 'SIGKILL'); }
-      catch { try { r.proc.kill('SIGKILL'); } catch {} }
-    }
+      if (pid) await killTree(pid, true);
+      else { try { r.proc.kill('SIGKILL'); } catch { /* already gone */ } }
+    }));
 
     // 3) Belt-and-suspenders: any process still listening on those ports
-    //    after the group kill is an orphan. `lsof -ti:PORT` lists PIDs;
-    //    pipe through xargs kill -9. We bound each call to 1.5s.
+    //    after the tree kill is an orphan. freePort() finds and kills it the
+    //    same way on every platform.
     const allPorts = new Set<number>();
     for (const ports of portsByService) for (const p of ports) allPorts.add(p);
     if (allPorts.size > 0) {
       console.log(`[services] freeing ports ${[...allPorts].join(', ')}`);
-      await Promise.all([...allPorts].map(async (port) => {
-        try {
-          // BSD xargs (macOS) doesn't have GNU's `-r`, so empty input
-          // would still try to run kill -9. Use a subshell instead so an
-          // empty PID list is a no-op.
-          await pexec(`PIDS=$(lsof -ti:${port} 2>/dev/null); [ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null; true`, {
-            timeout: 1500,
-            shell: '/bin/sh'
-          });
-        } catch { /* port may already be free */ }
-      }));
+      await Promise.all([...allPorts].map((port) => freePort(port).catch(() => ({ killed: [] }))));
     }
   }
 }

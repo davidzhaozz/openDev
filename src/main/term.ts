@@ -5,6 +5,7 @@ import { safeSend } from './safeSend.js';
 import { onShutdown } from './lifecycle.js';
 import { randomUUID } from 'crypto';
 import { LIMITS } from './limits.js';
+import { terminalShell } from './platform.js';
 
 // Coalesce PTY data into ~16ms frames before sending across IPC. Without
 // this, `cat huge.log` or `yes` floods the renderer with thousands of
@@ -85,13 +86,15 @@ async function loadNodePty(): Promise<typeof import('node-pty') | null> {
 
 async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> {
   const pty = await loadNodePty();
-  const shell = process.env.SHELL || '/bin/zsh';
+  const { file: shell, args: shellArgs } = terminalShell();
   if (pty) {
-    const term = pty.spawn(shell, [], {
+    const term = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
+      // node-pty drives ConPTY on Windows, which needs a real console host —
+      // useConpty:false would fall back to winpty and lose resize fidelity.
       env: process.env as Record<string, string>
     });
     return {
@@ -103,7 +106,9 @@ async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> 
     };
   }
   const { spawn } = await import('child_process');
-  const child = spawn(shell, ['-i'], { cwd, env: process.env });
+  // Fallback when node-pty's native module can't load. No TTY, so no prompt
+  // redraw or resize — but the shell still runs.
+  const child = spawn(shell, shellArgs.length ? shellArgs : ['-i'], { cwd, env: process.env, windowsHide: true });
   return {
     write: (s) => child.stdin?.write(s),
     resize: () => { /* not supported in fallback */ },

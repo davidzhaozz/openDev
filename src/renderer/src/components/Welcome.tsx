@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import type { AppSettings } from '../../../shared/types';
+import { baseName, shortenHome } from '@shared/paths';
 
 type Props = {
   onOpen: (path: string) => Promise<void> | void;
@@ -15,14 +16,8 @@ export function Welcome({ onOpen, onPick }: Props) {
     window.opendev.settings.get().then((s: AppSettings) => setRecents(s.recentWorkspaces || []));
   }, []);
 
-  const shortPath = (p: string) => {
-    const home = '/Users/';
-    if (p.startsWith(home)) {
-      const parts = p.split('/');
-      return '~/' + parts.slice(3).join('/');
-    }
-    return p;
-  };
+  // Handles /Users/<me>, /home/<me> and C:\\Users\\<me> alike.
+  const shortPath = (p: string) => shortenHome(p);
 
   return (
     <div className="welcome">
@@ -53,7 +48,7 @@ export function Welcome({ onOpen, onPick }: Props) {
           {recents.map(p => (
             <div key={p} className="welcome-recent" onClick={() => onOpen(p)}>
               <div className="welcome-recent-text">
-                <span className="welcome-name">{p.split('/').filter(Boolean).pop() || p}</span>
+                <span className="welcome-name">{baseName(p) || p}</span>
                 <span className="welcome-path">{shortPath(p)}</span>
               </div>
               <button

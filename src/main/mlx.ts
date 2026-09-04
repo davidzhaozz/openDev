@@ -6,6 +6,7 @@ import type { MlxAdapter, MlxProjectInfo, MlxStatus, MlxTrainEvent } from '@shar
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { serviceManager } from './services.js';
+import { isWithin, toPosix } from '@shared/paths';
 
 // ---- minimal yaml parser ---------------------------------------------------
 // lora_config.yaml is a flat scalar map with one optional level of nested
@@ -165,7 +166,7 @@ export async function detectMlxProject(): Promise<MlxProjectInfo | null> {
 // set; falls back to .venv-side binaries and finally `python3 -m mlx_lm.lora`.
 export async function buildTrainCommand(info: MlxProjectInfo): Promise<string> {
   const root = workspace.getRoot()!;
-  const cfgRel = info.configPath.startsWith(root + '/') ? info.configPath.slice(root.length + 1) : info.configPath;
+  const cfgRel = isWithin(info.configPath, root) && info.configPath.length > root.length ? toPosix(info.configPath.slice(root.length + 1)) : info.configPath;
   // 1. User-selected interpreter wins. If it's the workspace .venv's python
   //    AND a mlx_lm.lora wrapper sits next to it, prefer the wrapper for the
   //    cleaner ps output.
@@ -196,7 +197,7 @@ export async function buildTrainCommand(info: MlxProjectInfo): Promise<string> {
 // absolute path. Keeps the auto-service command compact for in-tree
 // interpreters and unambiguous for ones that live elsewhere (pyenv, conda).
 function rel(root: string, p: string): string {
-  return p === root || p.startsWith(root + '/') ? p.slice(root.length + 1) : p;
+  return isWithin(p, root) && p.length > root.length ? toPosix(p.slice(root.length + 1)) : p;
 }
 
 function quote(s: string): string {

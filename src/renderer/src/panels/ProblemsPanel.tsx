@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { baseName, fileUriToPath } from '@shared/paths';
 
 type Diag = { uri: string; range: { start: { line: number; character: number } }; severity?: number; message: string; source?: string };
 
@@ -23,12 +24,12 @@ export function ProblemsPanel({ onJump }: { onJump: (path: string, line: number,
       <div className="panel-header"><span>Problems ({flat.length})</span></div>
       <div className="panel-body">
         {flat.map((row, i) => {
-          const path = row.uri.replace(/^file:\/\//, '');
+          const path = fileUriToPath(row.uri);
           return (
             <div key={i} className="tree-row" onClick={() => onJump(path, row.d.range.start.line, row.d.range.start.character)}>
               <span className="icon" style={{ color: row.d.severity === 1 ? 'var(--danger)' : 'var(--warn)' }}>●</span>
               <span style={{ flex: 1 }}>{row.d.message}</span>
-              <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontSize: 10.5 }}>{path.split('/').pop()}:{row.d.range.start.line + 1}</span>
+              <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontSize: 10.5 }}>{baseName(path)}:{row.d.range.start.line + 1}</span>
             </div>
           );
         })}

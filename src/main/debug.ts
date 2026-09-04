@@ -10,6 +10,8 @@ import type { DebugEventMsg, DebugStartConfig, DebugVar, Scope, StackFrame } fro
 import { safeSend } from './safeSend.js';
 import { resolveBinPath } from './ai.js';
 import { workspace } from './workspace.js';
+import { spawnBin } from './platform.js';
+import { baseName } from '@shared/paths';
 
 // Debugger. A protocol-agnostic vocabulary the renderer talks to via
 // window.opendev.debug.*; behind it sits one DebugSession at a time.
@@ -50,7 +52,7 @@ class NodeDebugSession implements DebugSession {
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     if (node === process.execPath) env.ELECTRON_RUN_AS_NODE = '1';
 
-    this.proc = spawn(node, ['--inspect-brk=0', this.file], {
+    this.proc = spawnBin(node, ['--inspect-brk=0', this.file], {
       cwd: workspace.getRoot() ?? dirname(this.file),
       env,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -622,7 +624,7 @@ class PythonDebugSession implements DebugSession {
         }
         const lines: number[] = Array.isArray(args.lines) ? args.lines : [];
         const r = await this.dap.request('setBreakpoints', {
-          source: { path: args.path || path, name: (args.path || path).split('/').pop() },
+          source: { path: args.path || path, name: baseName(args.path || path) },
           breakpoints: lines.map((line) => ({ line })),
           lines
         });

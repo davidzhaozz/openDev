@@ -24,6 +24,7 @@ import type { DbConnectionProfile, DbResult, DbRowUpdate, DbUpdateResult, DbSche
 import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS } from './limits.js';
+import { hasBin } from './platform.js';
 
 // Slice a result set down to LIMITS.dbResultRows and flag it as truncated so
 // the UI can show "showing first N of M" rather than silently dropping rows.
@@ -221,11 +222,12 @@ async function probeNc(host: string, port: number, timeoutMs = 5000): Promise<Pr
 }
 
 async function runNetworkDiagnostic(host: string, port: number): Promise<ProbeStep[]> {
-  return Promise.all([
-    probeRawSocket(host, port, 4),
-    probeRawSocket(host, port),
-    probeNc(host, port)
-  ]);
+  const probes = [probeRawSocket(host, port, 4), probeRawSocket(host, port)];
+  // `nc` is the macOS/Linux cross-check for the Local Network TCC prompt.
+  // Windows has neither that permission model nor netcat, so running it there
+  // only adds a "spawn failed" line to the diagnostic.
+  if (hasBin('nc')) probes.push(probeNc(host, port));
+  return Promise.all(probes);
 }
 
 type Pool = { driver: 'mysql' | 'postgres' | 'elasticsearch'; client: any; profile: DbConnectionProfile; relay?: Relay };

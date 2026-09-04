@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppSettings } from '../../../shared/types';
 import { THEMES, applyTheme, themeById, type Theme } from '../themes';
 import { ModelCapabilityNote } from './ModelCapabilityNote';
+import { isMacPlatform } from '../platformUi';
 
 type Props = { onClose: () => void };
 
@@ -46,15 +47,26 @@ type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai';
 // Modifier-click chords for editor LSP navigation. Stored as a string in
 // AppSettings so a future "Cmd+Option" kind of combo could be added
 // without a migration. The mouse-click itself is implicit.
-const CHORD_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'meta',        label: '⌘ + click  (Cmd / Ctrl)' },
-  { value: 'meta+shift',  label: '⌘ ⇧ + click  (Cmd-Shift)' },
-  { value: 'meta+alt',    label: '⌘ ⌥ + click  (Cmd-Option)' },
-  { value: 'alt',         label: '⌥ + click  (Option)' },
-  { value: 'alt+shift',   label: '⌥ ⇧ + click  (Option-Shift)' },
-  { value: 'ctrl',        label: '⌃ + click  (literal Control)' },
-  { value: 'ctrl+shift',  label: '⌃ ⇧ + click  (Control-Shift)' }
-];
+// On Windows and Linux "meta" and "ctrl" both resolve to Ctrl+click (there is
+// no Command key), so the labels drop the Mac glyphs rather than promising a
+// distinction the platform can't make.
+const CHORD_OPTIONS: Array<{ value: string; label: string }> = isMacPlatform()
+  ? [
+      { value: 'meta',        label: '⌘ + click  (Cmd)' },
+      { value: 'meta+shift',  label: '⌘ ⇧ + click  (Cmd-Shift)' },
+      { value: 'meta+alt',    label: '⌘ ⌥ + click  (Cmd-Option)' },
+      { value: 'alt',         label: '⌥ + click  (Option)' },
+      { value: 'alt+shift',   label: '⌥ ⇧ + click  (Option-Shift)' },
+      { value: 'ctrl',        label: '⌃ + click  (literal Control)' },
+      { value: 'ctrl+shift',  label: '⌃ ⇧ + click  (Control-Shift)' }
+    ]
+  : [
+      { value: 'meta',        label: 'Ctrl + click' },
+      { value: 'meta+shift',  label: 'Ctrl + Shift + click' },
+      { value: 'meta+alt',    label: 'Ctrl + Alt + click' },
+      { value: 'alt',         label: 'Alt + click' },
+      { value: 'alt+shift',   label: 'Alt + Shift + click' }
+    ];
 
 export function Settings({ onClose }: Props) {
   const [tab, setTab] = useState<SettingsTab>('appearance');

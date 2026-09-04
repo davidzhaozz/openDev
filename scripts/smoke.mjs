@@ -7,12 +7,14 @@
 // Usage: SMOKE_WORKSPACE=/path/to/project node scripts/smoke.mjs
 
 import { promises as fs } from 'node:fs';
-import { spawn, exec } from 'node:child_process';
+import { spawn, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { rgPath } from '@vscode/ripgrep';
 
 const pexec = promisify(exec);
+const pexecFile = promisify(execFile);
+const IS_WIN = process.platform === 'win32';
 const WORKSPACE = process.env.SMOKE_WORKSPACE;
 if (!WORKSPACE) {
   console.error('Set SMOKE_WORKSPACE=/path/to/project to run.');
@@ -74,7 +76,20 @@ async function autoDetectServices(root) {
   return candidates;
 }
 
+// Mirrors src/main/ports.ts. `netstat -ano` is the Windows equivalent of the
+// lsof query and needs no elevation.
 async function listListeningPorts() {
+  if (IS_WIN) {
+    const { stdout } = await pexecFile('netstat', ['-ano'], { maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    const ports = [];
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/^\s*TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)\s*$/);
+      if (!m) continue;
+      const port = m[1].match(/:(\d+)$/);
+      if (port) ports.push({ port: Number(port[1]), pid: Number(m[2]), protocol: 'tcp' });
+    }
+    return ports;
+  }
   const { stdout } = await pexec('lsof -nP -iTCP -sTCP:LISTEN -F pcPn', { maxBuffer: 4 * 1024 * 1024 });
   const ports = [];
   let cur = {};
@@ -90,14 +105,29 @@ async function listListeningPorts() {
   return ports;
 }
 
+// Windows has no process groups to signal; taskkill /T walks the tree.
+function killTree(pid, force) {
+  if (!pid) return;
+  if (IS_WIN) {
+    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); }
+    catch { /* already gone */ }
+    return;
+  }
+  const signal = force ? 'SIGKILL' : 'SIGTERM';
+  try { process.kill(-pid, signal); } catch { try { process.kill(pid, signal); } catch {} }
+}
+
 async function startServiceAndWaitForPort(def, root, expectedPort, timeoutMs) {
   const cwd = resolve(root, def.cwd);
   const proc = spawn(def.command, {
     cwd,
-    shell: true,
+    shell: IS_WIN ? (process.env.COMSPEC || true) : true,
     env: { ...process.env, FORCE_COLOR: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true
+    // detached would open a console window per service on Windows; the tree
+    // is walked by taskkill instead.
+    detached: !IS_WIN,
+    windowsHide: true
   });
   const logs = [];
   let stdoutSeen = false;
@@ -114,8 +144,8 @@ async function startServiceAndWaitForPort(def, root, expectedPort, timeoutMs) {
       await new Promise(r => setTimeout(r, 400));
     }
   } finally {
-    try { process.kill(-proc.pid, 'SIGTERM'); } catch { try { proc.kill('SIGTERM'); } catch {} }
-    setTimeout(() => { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} }, 2000);
+    killTree(proc.pid, false);
+    setTimeout(() => killTree(proc.pid, true), 2000);
   }
   return { found, stdoutSeen, logs: logs.join('').slice(-1500), exitCode: proc.exitCode };
 }
@@ -152,10 +182,10 @@ async function gitWorktreeRoundTrip(root) {
   const wtPath = join(wtRoot, name);
   const branch = `opendev/${name}`;
   try {
-    await pexec(`git worktree add -b ${branch} '${wtPath}'`, { cwd: root });
+    await pexecFile('git', ['worktree', 'add', '-b', branch, wtPath], { cwd: root });
   } finally {
-    try { await pexec(`git worktree remove --force '${wtPath}'`, { cwd: root }); } catch {}
-    try { await pexec(`git branch -D ${branch}`, { cwd: root }); } catch {}
+    try { await pexecFile('git', ['worktree', 'remove', '--force', wtPath], { cwd: root }); } catch {}
+    try { await pexecFile('git', ['branch', '-D', branch], { cwd: root }); } catch {}
     try { await fs.rm(wtRoot, { recursive: true, force: true }); } catch {}
   }
   return `worktree create + remove ok (${name})`;
@@ -167,7 +197,7 @@ async function main() {
   await check('workspace exists', async () => {
     const st = await fs.stat(WORKSPACE);
     if (!st.isDirectory()) throw new Error('not a directory');
-    return WORKSPACE.split('/').slice(-2).join('/');
+    return join(basename(dirname(WORKSPACE)), basename(WORKSPACE));
   });
 
   let files = [];
@@ -185,7 +215,7 @@ async function main() {
       : 'no services detected (no apps/ or packages/ monorepo layout) — skipping service tests';
   });
 
-  await check('lsof port listing', async () => {
+  await check('listening-port enumeration', async () => {
     const ports = await listListeningPorts();
     return `${ports.length} listening ports observed`;
   });

@@ -4,6 +4,7 @@ import { loadSettings, patchSettings } from './storage.js';
 import { safeSend } from './safeSend.js';
 import { IPC } from '@shared/ipc';
 import type { FileChange } from '@shared/types';
+import { isWithin } from '@shared/paths';
 
 class Workspace {
   private root: string | undefined;
@@ -97,6 +98,5 @@ export const requireRoot = (): string => {
 export function safeWithinRoot(p: string): boolean {
   const root = workspace.getRoot();
   if (!root) return false;
-  const norm = join(p);
-  return norm === root || norm.startsWith(root + '/');
+  return isWithin(join(p), root);
 }

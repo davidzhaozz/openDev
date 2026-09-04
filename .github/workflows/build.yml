@@ -1,0 +1,79 @@
+# Cross-platform build + smoke.
+#
+# The Windows job is the point: OpenDev is developed on a Mac, so this runner
+# is the only place the Windows branches in platform.ts, ports.ts, term.ts and
+# python.ts actually execute. It also produces the installer, since NSIS can't
+# be built on macOS without Wine.
+name: build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # node-pty and keytar are native. `npm ci` builds or fetches prebuilds
+      # for the runner's own platform, which is what the smoke test needs.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (Electron bundles)
+        run: npm run build
+
+      - name: Build (headless server + web renderer)
+        run: npm run web:build
+
+      # Exercises the real main-process code — filesystem, git, ripgrep, port
+      # enumeration, a live PTY, Python detection — on this OS.
+      - name: Headless smoke
+        run: node scripts/smoke-headless.mjs
+
+  windows-installer:
+    name: windows installer
+    runs-on: windows-latest
+    needs: check
+    # Only worth the ~5 minutes on the default branch and on demand.
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Package
+        run: npm run dist:win
+        env:
+          # electron-builder would otherwise try to publish to GitHub Releases.
+          GH_TOKEN: ''
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenDev-IDE-windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest*.yml
+          if-no-files-found: error
+          retention-days: 30

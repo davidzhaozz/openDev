@@ -14,6 +14,8 @@ import { onShutdown } from './lifecycle.js';
 import { workspace } from './workspace.js';
 import { bundleRepo, applyBundle, peerRepoDir } from './git.js';
 import { resolveBinPath } from './ai.js';
+import { detachedSpawnOptions, spawnBin } from './platform.js';
+import { baseName } from '@shared/paths';
 
 // LAN machine-linking. Two OpenDev IDE instances that share a link key discover
 // each other over UDP broadcast and trust each other via HMAC — the raw key
@@ -364,7 +366,7 @@ class PeerManager {
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Transfer-Encoding': 'chunked' });
-    const proc = spawn(cmd, [entryAbs], { cwd: repoDir, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+    const proc = spawnBin(cmd, [entryAbs], { cwd: repoDir, ...detachedSpawnOptions(), stdio: ['ignore', 'pipe', 'pipe'], env });
     this.inboundRuns.set(payload.runId, proc);
 
     const onData = (b: Buffer) => { try { res.write(b); } catch {} };
@@ -412,7 +414,7 @@ class PeerManager {
     if (!peer) throw new Error('Peer is not online.');
     const root = workspace.getRoot();
     if (!root) throw new Error('No workspace open.');
-    const wsName = root.split('/').filter(Boolean).pop() || 'repo';
+    const wsName = baseName(root) || 'repo';
     const bundlePath = await bundleRepo(root);
     try {
       const body = await fs.readFile(bundlePath);
@@ -435,7 +437,7 @@ class PeerManager {
     if (!peer) throw new Error('Peer is not online.');
     const root = workspace.getRoot();
     if (!root) throw new Error('No workspace open.');
-    const wsName = root.split('/').filter(Boolean).pop() || 'repo';
+    const wsName = baseName(root) || 'repo';
     const agentDir = join(root, '.opendev', 'agents', slug);
     const manifest = JSON.parse(await fs.readFile(join(agentDir, 'agent.json'), 'utf8')) as AgentManifest;
     const files = await packDir(agentDir);

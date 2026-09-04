@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AIChat } from './panels/AIChat';
 import { applyAppearanceSettings } from './components/Settings';
 import './styles/global.css';
+import { WindowControls, usesFramelessChrome } from './components/WindowControls';
 
 type Props = {
   conversationId?: string;
@@ -37,6 +38,7 @@ export function PopoutAi({ conversationId, initialName, initialPrompt }: Props) 
     <div className="app" style={{ gridTemplateRows: '32px 1fr', height: '100vh' }}>
       <div className="titlebar">
         <span className="title">🤖 {title}</span>
+        {usesFramelessChrome() && <WindowControls />}
       </div>
       <div style={{ background: 'var(--bg-0)', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <AIChat

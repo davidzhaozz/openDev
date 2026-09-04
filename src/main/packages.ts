@@ -6,6 +6,7 @@ import { IPC } from '@shared/ipc';
 import type { AddPackageArgs, AddPackageResult, DetectedProject } from '@shared/types';
 import { safeSend } from './safeSend.js';
 import { resolveBinPath } from './ai.js';
+import { spawnBin } from './platform.js';
 
 // Add a package/dependency to a Maven (Java) or .NET (C#) project, with
 // live install output streamed to the renderer. Maven: edit pom.xml + run
@@ -39,7 +40,7 @@ function runStreamed(cmdName: string, args: string[], cwd: string): Promise<{ co
       return;
     }
     logLine(`$ ${cmdName} ${args.join(' ')}`);
-    const proc = spawn(resolved, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+    const proc = spawnBin(resolved, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
     proc.stdout?.on('data', (b: Buffer) => logLine(b.toString('utf8')));
     proc.stderr?.on('data', (b: Buffer) => logLine(b.toString('utf8')));
     proc.on('error', (e) => { logLine(`[spawn error] ${e.message}`); resolve({ code: -1 }); });

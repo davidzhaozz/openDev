@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PipPackage, PipRequirement, PythonInterpreter } from '../../../shared/types';
 import { useStore } from '../state/store';
+import { baseName } from '@shared/paths';
 
 // PyCharm-style package manager. Lists pip-installed packages for the
 // workspace's selected interpreter, marks outdated ones, and runs
@@ -123,7 +124,7 @@ export function PipPanel() {
     setInstallLog('');
     try {
       await window.opendev.pip.installRequirements(reqs.path);
-      showToast(`Installed from ${reqs.path.split('/').pop()}`, 2500);
+      showToast(`Installed from ${baseName(reqs.path)}`, 2500);
       await refresh();
       await refreshReqs();
     } catch (e: any) {

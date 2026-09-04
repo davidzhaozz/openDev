@@ -79,15 +79,48 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent-hi);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 12px 0 78px;
+  padding: 0 12px;
   font-family: var(--font-ui);
   font-size: calc(var(--ui-font-size) - 1px);
   color: var(--fg-2);
   gap: 10px;
 }
+/* macOS insets its traffic lights over the titlebar; reserve the space they
+   occupy. Windows and Linux draw their controls at the right instead (see
+   .window-controls), so they keep the default padding. */
+html[data-platform="darwin"] .titlebar { padding-left: 78px; }
 .titlebar .title { font-weight: 600; color: var(--fg-1); font-size: var(--ui-font-size); }
 .titlebar .path { color: var(--fg-2); font-family: var(--font-mono); font-size: calc(var(--ui-font-size) - 1.5px); }
 .titlebar .actions { margin-left: auto; -webkit-app-region: no-drag; display: flex; gap: 6px; }
+
+/* Frameless window controls (Windows / Linux). Full-bleed to the top-right
+   corner and 46px wide, matching the Windows hit targets users expect. */
+.window-controls {
+  margin-left: auto;
+  align-self: stretch;
+  display: flex;
+  -webkit-app-region: no-drag;
+  /* Cancel the titlebar's right padding so the close button reaches the
+     corner, the way a native caption bar does. */
+  margin-right: -12px;
+}
+.titlebar .actions + .window-controls { margin-left: 8px; }
+.window-control {
+  width: 46px;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.window-control:hover { background: var(--bg-solid-3); }
+.window-control:active { background: var(--bg-solid-2); }
+.window-control.close:hover { background: #c42b1c; color: #fff; }
+.window-control.close:active { background: #b0261a; color: #fff; }
 
 .workspace {
   display: flex;

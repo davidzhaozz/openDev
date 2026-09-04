@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
+import { baseName } from '@shared/paths';
 
 export function FuzzyFinder() {
   const setModal = useStore(s => s.setModal);
@@ -51,8 +52,8 @@ export function FuzzyFinder() {
               onMouseEnter={() => setActive(i)}
               onClick={() => open(it.path)}
             >
-              <span>{(it.relative || it.path).split('/').pop()}</span>
-              <span className="relpath">{(it.relative || it.path).slice(0, -((it.relative || it.path).split('/').pop()?.length || 0))}</span>
+              <span>{baseName((it.relative || it.path))}</span>
+              <span className="relpath">{(it.relative || it.path).slice(0, -(baseName((it.relative || it.path))?.length || 0))}</span>
             </div>
           ))}
           {!items.length && q && <div className="modal-row" style={{ color: 'var(--fg-3)' }}>No matches</div>}

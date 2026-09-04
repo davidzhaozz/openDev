@@ -20,5 +20,5 @@
       "@renderer/*": ["src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts"]
+  "include": ["src/renderer/**/*", "src/web/**/*", "src/shared/**/*", "src/preload/index.d.ts"]
 }

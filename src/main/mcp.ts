@@ -38,7 +38,10 @@ import { loadSettings, patchSettings } from './storage.js';
 import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
-const PORT = 53825;
+// Fixed by default so an editor's MCP config can hard-code the URL. The env
+// override exists so a second instance — notably the web server in
+// src/server/ — can run alongside the desktop app instead of losing the bind.
+const PORT = Number(process.env.OPENDEV_MCP_PORT) || 53825;
 const HOST_LOOPBACK = '127.0.0.1';
 const HOST_ALL = '0.0.0.0';
 

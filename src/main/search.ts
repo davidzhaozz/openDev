@@ -7,6 +7,7 @@ import type { GrepHit } from '@shared/types';
 import { workspace } from './workspace.js';
 import { walkAllFiles } from './fs.js';
 import { safeSend } from './safeSend.js';
+import { isWithin, toPosix } from '@shared/paths';
 
 let fileIndex: { root: string; files: string[]; builtAt: number } | null = null;
 let indexing: Promise<void> | null = null;
@@ -45,7 +46,7 @@ export function registerSearchIpc() {
     return results.map(r => ({
       path: r.target,
       score: r.score,
-      relative: r.target.startsWith(root + '/') ? r.target.slice(root.length + 1) : r.target
+      relative: isWithin(r.target, root) && r.target.length > root.length ? toPosix(r.target.slice(root.length + 1)) : r.target
     }));
   });
 

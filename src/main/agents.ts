@@ -9,6 +9,7 @@ import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { resolveBinPath } from './ai.js';
 import { BUILTIN_AGENTS, BUILTIN_SLUGS } from './defaultAgents.js';
+import { spawnBin } from './platform.js';
 
 // Each agent is a self-contained Node.js app under .opendev/agents/<slug>/.
 // This module is the manifest store + run manager, modeled on services.ts.
@@ -293,7 +294,7 @@ class AgentManager {
     const timeoutMs = Math.min(Math.max(1000, opts.timeoutMs ?? 120_000), 600_000);
     const cap = 2 * 1024 * 1024;
     return new Promise((resolveP) => {
-      const proc = spawn(cmd, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env });
+      const proc = spawnBin(cmd, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env });
       let output = '';
       let timedOut = false;
       const onData = (b: Buffer) => { if (output.length < cap) output += b.toString('utf8'); };
@@ -330,7 +331,7 @@ class AgentManager {
 
     const runId = `ar-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const streamId = runId;
-    const proc = spawn(cmd, args, {
+    const proc = spawnBin(cmd, args, {
       cwd: root,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],

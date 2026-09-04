@@ -98,7 +98,11 @@ function SystemStatsChip() {
     >
       <span className={`sys-stat-pill ${memCls}`}>MEM {gb(stats.memUsedBytes)}/{gb(stats.memTotalBytes)}G</span>
       <span className={`sys-stat-pill ${cpuCls}`}>CPU {stats.cpuPct.toFixed(0)}%</span>
-      <span className={`sys-stat-pill ${fdCls}`}>FD {stats.fdCount}{stats.fdLimit ? `/${formatFdLimit(stats.fdLimit)}` : ''}</span>
+      {/* Windows has handles rather than file descriptors and reports neither,
+          so the pill is hidden there instead of reading a flat "FD 0". */}
+      {(stats.fdCount > 0 || stats.fdLimit > 0) && (
+        <span className={`sys-stat-pill ${fdCls}`}>FD {stats.fdCount}{stats.fdLimit ? `/${formatFdLimit(stats.fdLimit)}` : ''}</span>
+      )}
       {gpuLabel && <span className="sys-stat-pill ok" title={gpuTitle}>{gpuLabel}</span>}
     </div>
   );

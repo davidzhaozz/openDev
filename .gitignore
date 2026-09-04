@@ -13,3 +13,7 @@ docs/
 
 # AI assistant context — local only, never published
 CLAUDE.md
+out-web/
+
+# Per-workspace IDE state written by OpenDev itself when it opens this repo.
+.opendev/

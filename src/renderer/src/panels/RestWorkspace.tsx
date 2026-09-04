@@ -4,6 +4,7 @@ import { Resizer } from '../components/Resizer';
 import { JsonTree } from '../components/JsonTree';
 import { QueryHistoryButton } from '../components/QueryHistoryButton';
 import type { RestAuth, RestBody, RestHeader, RestMethod, RestParam, RestRequestSpec, RestResponse, RestSavedRequest } from '../../../shared/types';
+import { modKey } from '../platformUi';
 
 const METHODS: RestMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -123,7 +124,7 @@ export function RestWorkspace({ tabId }: { tabId: string }) {
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); } }}
           spellCheck={false}
         />
-        <button className="primary" disabled={running} onClick={run}>{running ? 'Sending…' : 'Send ⌘↵'}</button>
+        <button className="primary" disabled={running} onClick={run}>{running ? 'Sending…' : `Send ${modKey()}↵`}</button>
         <button onClick={save} title={savedId ? 'Update saved request' : 'Save to right-panel collection'}>
           {savedId ? 'Update' : 'Save'}
         </button>

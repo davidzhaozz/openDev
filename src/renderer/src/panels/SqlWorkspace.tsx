@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useStore } from '../state/store';
 import { Resizer } from '../components/Resizer';
 import { QueryHistoryButton } from '../components/QueryHistoryButton';
+import { modKey } from '../platformUi';
 
 function formatCell(v: unknown): ReactNode {
   if (v === null || v === undefined) return <em className="null">null</em>;
@@ -275,7 +276,7 @@ export function SqlWorkspace() {
   return (
     <div className="sql-workspace">
       <div className="sql-toolbar">
-        <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : 'Run ⌘↵'}</button>
+        <button className="primary" disabled={running || !sqlConnId} onClick={run}>{running ? 'Running…' : `Run ${modKey()}↵`}</button>
         <QueryHistoryButton kind="sql" refreshKey={historyTick} onPick={(text) => setSqlText(text)} />
         <span className="grow" />
         <span className="sql-status">
@@ -406,7 +407,7 @@ export function SqlWorkspace() {
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); }
         }}
-        placeholder="-- write a SQL query, then ⌘↵ to run"
+        placeholder={`-- write a SQL query, then ${modKey()}↵ to run`}
         style={{ height: layout.sqlSplit, flex: `0 0 ${layout.sqlSplit}px` }}
       />
     </div>

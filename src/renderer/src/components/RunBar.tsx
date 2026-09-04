@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PythonRunConfig } from '../../../shared/types';
 import { useStore } from '../state/store';
+import { baseName } from '@shared/paths';
 
 // PyCharm-style run toolbar. Drop-down of saved configs + ▶ Run + ⏸ Stop
 // + ⚙ Edit Configurations. Always rendered; if there are no configs yet,
@@ -70,7 +71,7 @@ export function RunBar({ activeFilePath }: { activeFilePath?: string }) {
       return;
     }
     showRun();
-    const name = `▶ ${activeFilePath.split('/').pop()}`;
+    const name = `▶ ${baseName(activeFilePath)}`;
     try {
       const s = await window.opendev.runs.startAdHoc({
         name, mode: 'script', target: activeFilePath, args: [], cwd: '.', env: {}
@@ -110,7 +111,7 @@ export function RunBar({ activeFilePath }: { activeFilePath?: string }) {
         ? <button className="run-btn stop" onClick={stopActive} title="Stop the active run">■</button>
         : <button className="run-btn play" onClick={startSelected} disabled={!selectedId} title="Run selected config">▶</button>}
       {isPyFile && !running && (
-        <button className="run-btn file" onClick={runCurrentFile} title={`Run ${activeFilePath?.split('/').pop()}`}>▶ this file</button>
+        <button className="run-btn file" onClick={runCurrentFile} title={`Run ${activeFilePath ? baseName(activeFilePath) : ''}`}>▶ this file</button>
       )}
       <button className="run-btn edit" onClick={() => openEditor()} title="Edit run configurations">⚙</button>
       {editorOpen && (
