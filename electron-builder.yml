@@ -22,6 +22,17 @@ files:
   # Debug symbols for the prebuilt natives — ~28 MB that nothing reads at
   # runtime. Excluded so the Windows installer isn't needlessly fat.
   - "!node_modules/**/*.pdb"
+# Both native modules ship N-API prebuilds — node-pty 1.1 builds against
+# node-addon-api and carries prebuilds/win32-x64 &c., and keytar publishes its
+# binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
+# Electron, so those binaries load under Electron exactly as npm installed
+# them. @electron/rebuild doesn't recognise the prebuildify layout and tries to
+# compile node-pty from source anyway, which is the only thing in this build
+# that needs a C++ toolchain — and it fails on the GitHub windows runner, whose
+# Visual Studio node-gyp can't find. Skipping the rebuild drops that toolchain
+# dependency entirely; if a future dependency is NAN-based rather than N-API,
+# this has to come back on and the runner needs a working MSVC.
+npmRebuild: false
 asarUnpack:
   - "**/*.node"
   # node-pty needs more than its .node files on Windows: ConPTY loads
