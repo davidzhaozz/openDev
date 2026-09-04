@@ -96,6 +96,12 @@ win:
   # with an EV or OV code-signing certificate — set CSC_LINK / CSC_KEY_PASSWORD
   # in the environment to sign at build time.
   artifactName: ${productName}-${version}-${arch}.${ext}
+portable:
+  # Without its own name the portable target renders to the same
+  # ${productName}-${version}-${arch}.${ext} path as nsis and silently
+  # overwrites the installer — the build reports success and only one .exe
+  # survives.
+  artifactName: ${productName}-${version}-${arch}-portable.${ext}
 nsis:
   oneClick: false
   perMachine: false
