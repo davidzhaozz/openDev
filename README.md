@@ -50,7 +50,7 @@ places where it is a Mac app rather than a generic Electron app:
 | **Passwords** | Database passwords and API credentials go into the **macOS Keychain** via `keytar` — never into a config file |
 | **Ports** | The Ports panel and "free port" use `lsof` to find listening sockets and their owning processes (`src/main/ports.ts`) |
 | **Python** | Interpreter detection knows the Mac layouts: Homebrew on Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`), Apple's system Python, python.org framework builds, pyenv and conda (`src/main/python.ts`) |
-| **Apple Silicon / MLX** | The ML panel and local-model server drive Apple's **MLX** (`mlx_lm.lora`, `mlx_lm.server`), which runs only on Apple Silicon (`src/main/mlx.ts`, `src/main/localModels.ts`) |
+| **Apple Silicon** | Built for arm64 only. The ML panel and local-model server drive Apple's **MLX** (`mlx_lm.lora`, `mlx_lm.server`) (`src/main/mlx.ts`, `src/main/localModels.ts`) |
 | **Finder** | "Reveal in Finder" on files, checkpoints and adapters (`shell.showItemInFolder`) |
 | **Settings location** | `~/Library/Application Support/openDev/` |
 | **Local network** | macOS 15+ blocks LAN traffic for apps that don't declare it. The app's Info.plist carries `NSLocalNetworkUsageDescription` + Bonjour service keys so connecting to databases/dev servers on 192.168.x.x / 10.x.x.x works; macOS asks once for permission |
@@ -127,7 +127,7 @@ places where it is a Mac app rather than a generic Electron app:
 
 ### Requirements
 
-- macOS 13+ (Apple Silicon recommended; Intel works, but the MLX panel needs Apple Silicon)
+- macOS 13+ on Apple Silicon (M1 or later). Intel Macs are not supported.
 - Xcode Command Line Tools (`xcode-select --install`) — for `git`, and for compiling native modules if a prebuild is missing
 - Node.js 20+ and npm
 - (Optional) `claude` CLI from Anthropic if you want the CLI streaming path

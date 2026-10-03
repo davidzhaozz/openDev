@@ -38,3 +38,14 @@ jobs:
       # enumeration, a live PTY, Python detection — on macOS.
       - name: Headless smoke
         run: node scripts/smoke-headless.mjs
+
+      # Package the real .app (unsigned — the Developer ID cert stays on the
+      # Mac) and prove it carries no Windows payload and its native modules
+      # load. Catches the 0.7.20 failure: a Windows keytar.node in a Mac build.
+      - name: Package (unsigned) + verify Mac-only payload
+        run: |
+          npx electron-builder --mac --dir --config electron-builder.yml -c.mac.identity=null
+          node scripts/verify-mac-build.mjs
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          VERIFY_SKIP_KEYCHAIN: '1'

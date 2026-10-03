@@ -21,6 +21,15 @@ files:
   - "!node_modules/node-pty/build/node_gyp_bins/**"
   # Debug symbols for the prebuilt natives — nothing reads them at runtime.
   - "!node_modules/**/*.pdb"
+  # Mac edition: no Windows payload. node-pty ships Windows prebuilds and the
+  # winpty sources in its npm package; packages also carry .cmd/.bat/.ps1
+  # helpers. None of it runs on macOS. scripts/verify-mac-build.mjs fails the
+  # build if a Windows binary gets in anyway.
+  - "!node_modules/node-pty/prebuilds/win32-*/**"
+  # The DMG is arm64-only (mac.target below), so the Intel prebuild is dead weight.
+  - "!node_modules/node-pty/prebuilds/darwin-x64/**"
+  - "!node_modules/node-pty/deps/**"
+  - "!**/*.{exe,dll,bat,cmd,ps1}"
 # Both native modules ship N-API prebuilds — node-pty 1.1 builds against
 # node-addon-api and carries prebuilds/darwin-arm64 &c., and keytar publishes
 # its binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
