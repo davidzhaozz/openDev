@@ -19,7 +19,8 @@ import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const app = process.argv[2] || join(root, 'dist', 'mac-arm64', 'OpenDev IDE.app');
-const arch = app.includes('mac-arm64') ? 'arm64' : 'x86_64';
+// Apple Silicon only — the DMG is built for arm64 and Intel Macs aren't supported.
+const arch = 'arm64';
 if (!existsSync(app)) { console.error(`[verify-mac] no app at ${app}`); process.exit(1); }
 
 const problems = [];
