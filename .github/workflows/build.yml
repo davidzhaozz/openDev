@@ -51,8 +51,8 @@ jobs:
     name: windows installer
     runs-on: windows-latest
     needs: check
-    # Only worth the ~5 minutes on the default branch and on demand.
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    # Only worth the ~5 minutes on the Windows branches and on demand.
+    if: github.ref == 'refs/heads/windows-develop' || github.ref == 'refs/heads/windows-release' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4

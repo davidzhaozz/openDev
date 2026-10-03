@@ -1,6 +1,6 @@
 # openDev
 
-**An AI-first IDE for macOS — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
+**An AI-first IDE for macOS and Windows (two separate versions — see [Branches](#branches-macos-and-windows-are-separate-lines)) — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
 
 ---
 
@@ -15,6 +15,39 @@ Most JS / TS developers reach for VS Code or WebStorm. Both work; both have spec
 - **Opinionated minimalism.** JetBrains-style density and chrome. Working defaults instead of a settings sprawl. JavaScript and TypeScript only.
 
 If you live in JS / TS, use Claude for coding, and want one app for code + AI + databases + dev-server preview — that's the wedge.
+
+---
+
+## Branches: macOS and Windows are separate lines
+
+openDev ships as **two versions, one per operating system**, and each has its own
+development and release branch:
+
+| Branch | Platform | Purpose |
+|---|---|---|
+| `mac-develop` | macOS | day-to-day macOS work; merge feature branches here |
+| `mac-release` | macOS | what ships as the `.app` / `.dmg`; only take tested commits from `mac-develop` |
+| `windows-develop` | Windows | day-to-day Windows work; merge feature branches here |
+| `windows-release` | Windows | what ships as the NSIS / portable `.exe`; only take tested commits from `windows-develop` |
+
+They are kept apart on purpose. The two builds target different systems —
+different shells, process and port handling, keychain vs. credential store,
+native modules built per platform, `.dmg` vs. `.exe` packaging — and a change
+that is right for one can break the other. Splitting the lines means a macOS
+release never waits on Windows verification (which only happens on CI, see
+[WINDOWS.md](WINDOWS.md)), and a Windows fix never lands in a Mac release
+untested.
+
+How to work with them:
+
+- Start platform work from that platform's `-develop` branch and merge back into it.
+- Promote to `-release` only when the build has been run on that OS (the Mac
+  locally, Windows via the `build` workflow).
+- A fix that applies to both (shared code in `src/shared/`, the renderer, etc.)
+  is committed to one `-develop` branch and cherry-picked into the other —
+  don't merge `mac-*` and `windows-*` into each other wholesale.
+- The Windows installer job in CI runs on `windows-develop`, `windows-release`
+  and on demand.
 
 ---
 

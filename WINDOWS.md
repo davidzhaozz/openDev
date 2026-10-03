@@ -21,7 +21,9 @@ search or credential read. The Windows artifact has to be produced on Windows.
 | `check` | `windows-latest` + `macos-latest` | typecheck, build both bundles, run the headless smoke |
 | `windows-installer` | `windows-latest` | `npm run dist:win`, uploads the `.exe`s as an artifact |
 
-The installer job runs on pushes to `develop`/`main` and on demand. To get a
+The installer job runs on pushes to `windows-develop`/`windows-release` and on
+demand. Windows work lives on those two branches; macOS has its own
+`mac-develop`/`mac-release` (see the README's *Branches* section). To get a
 build now:
 
 ```
