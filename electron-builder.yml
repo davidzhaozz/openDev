@@ -20,13 +20,12 @@ files:
   # at runtime needs it, and `npm rebuild` can recreate it, so exclude it.
   - "!node_modules/node-pty/build/node_gyp_bins/**"
   # Debug symbols for the prebuilt natives — ~28 MB that nothing reads at
-  # runtime. Excluded so the Windows installer isn't needlessly fat.
+  # runtime.
   - "!node_modules/**/*.pdb"
-  # Windows edition: no macOS payload. node-pty's npm package carries darwin
-  # prebuilds (Mach-O .node files and spawn-helper); none of it runs on
-  # Windows. scripts/verify-win-build.mjs fails the build if any gets in.
-  - "!node_modules/node-pty/prebuilds/darwin-*/**"
-  - "!**/*.dylib"
+# One codebase, two apps. node-pty and friends ship every platform's binaries
+# in their npm packages, so each platform's `files` below drops the other
+# platform's payload. scripts/verify-mac-build.mjs and verify-win-build.mjs
+# then fail the build if anything foreign got in anyway.
 # Both native modules ship N-API prebuilds — node-pty 1.1 builds against
 # node-addon-api and carries prebuilds/win32-x64 &c., and keytar publishes its
 # binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
@@ -38,14 +37,8 @@ files:
 # dependency entirely; if a future dependency is NAN-based rather than N-API,
 # this has to come back on and the runner needs a working MSVC.
 npmRebuild: false
-# The resident PowerShell process-table host (src/main/psHost.ts) runs this with
-# -File, and PowerShell cannot open a path inside the asar. extraResources puts
-# it straight into <resourcesPath>, so it is a real file on disk with no
-# unpacking dance. afterPack Authenticode-signs it with the same certificate as
-# the binaries — see scripts/sign-ps1.mjs.
-extraResources:
-  - from: resources/procmap.ps1
-    to: procmap.ps1
+# afterPack Authenticode-signs procmap.ps1 (see win.extraResources); it is a
+# no-op for macOS builds.
 afterPack: scripts/sign-ps1.mjs
 asarUnpack:
   - "**/*.node"
@@ -68,6 +61,13 @@ asarUnpack:
   - "node_modules/pyright/**/*"
 mac:
   category: public.app-category.developer-tools
+  # macOS app: no Windows payload (node-pty's win32 prebuilds, winpty sources,
+  # Windows scripts/binaries), and arm64 only — Intel Macs aren't supported.
+  files:
+    - "!node_modules/node-pty/prebuilds/win32-*/**"
+    - "!node_modules/node-pty/prebuilds/darwin-x64/**"
+    - "!node_modules/node-pty/deps/**"
+    - "!**/*.{exe,dll,bat,cmd,ps1}"
   target:
     - target: dmg
       arch:
@@ -97,6 +97,18 @@ mac:
       - _postgresql._tcp
       - _mysql._tcp
 win:
+  # Windows app: no macOS payload (node-pty's darwin prebuilds — Mach-O .node
+  # files and spawn-helper — and any .dylib).
+  files:
+    - "!node_modules/node-pty/prebuilds/darwin-*/**"
+    - "!**/*.dylib"
+  # The resident PowerShell process-table host (src/main/psHost.ts) runs this
+  # with -File, and PowerShell cannot open a path inside the asar.
+  # extraResources puts it straight into <resourcesPath>, so it is a real file
+  # on disk with no unpacking dance. Windows only.
+  extraResources:
+    - from: resources/procmap.ps1
+      to: procmap.ps1
   # NSIS installer for normal use, plus a portable .exe for machines where the
   # user can't run an installer (locked-down corporate images, quick tests on
   # a throwaway VM). Both are x64; Windows-on-ARM runs x64 under emulation.

@@ -47,12 +47,25 @@ jobs:
       - name: Headless smoke
         run: node scripts/smoke-headless.mjs
 
+      # Package the real .app (unsigned — the Developer ID cert stays on the
+      # Mac) and prove it carries no Windows payload and its native modules
+      # load. The Windows side gets the same proof from verify-win-build.mjs
+      # in the installer job.
+      - name: Package macOS app (unsigned) + verify Mac-only payload
+        if: runner.os == 'macOS'
+        run: |
+          npx electron-builder --mac --dir --config electron-builder.yml -c.mac.identity=null
+          node scripts/verify-mac-build.mjs
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          VERIFY_SKIP_KEYCHAIN: '1'
+
   windows-installer:
     name: windows installer
     runs-on: windows-latest
     needs: check
     # Only worth the ~5 minutes on the Windows branches and on demand.
-    if: github.ref == 'refs/heads/windows-develop' || github.ref == 'refs/heads/windows-release' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/release' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4

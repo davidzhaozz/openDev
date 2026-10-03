@@ -1,18 +1,17 @@
-# Enforces the release flow: each release branch only accepts pull requests
-# from its own platform's develop branch.
+# Enforces the release flow: the release branch only accepts pull requests
+# from develop.
 #
-#   mac-develop     -> mac-release
-#   windows-develop -> windows-release
+#   develop -> release
 #
 # The repository ruleset on the release branches requires this check, so a
-# PR from any other branch (e.g. windows-develop -> mac-release) can't merge.
+# PR from any other branch can't merge.
 # pull_request_target runs the copy of this file on the *base* branch, so a
 # PR can't weaken the rule by editing it. Nothing from the PR is checked out.
 name: branch-guard
 
 on:
   pull_request_target:
-    branches: [mac-release, windows-release]
+    branches: [release]
     types: [opened, reopened, synchronize, edited]
 
 permissions: {}
@@ -30,8 +29,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           case "$BASE" in
-            mac-release)     allowed=mac-develop ;;
-            windows-release) allowed=windows-develop ;;
+            release) allowed=develop ;;
             *) echo "No rule for $BASE"; exit 0 ;;
           esac
           if [ "$HEAD_REPO" != "$REPO" ] || [ "$HEAD" != "$allowed" ]; then

@@ -37,7 +37,8 @@ const problems = [];
 
 if (config) {
   // src/main/psHost.ts spawns `powershell -File <resourcesPath>/procmap.ps1`.
-  const res = config.extraResources;
+  // Windows-only resource, so it lives under `win:`; top level still accepted.
+  const res = [...(config.win?.extraResources ?? []), ...(config.extraResources ?? [])];
   const hasProcmap =
     Array.isArray(res) &&
     res.some((e) => (typeof e === 'string' ? e : e?.to) === 'procmap.ps1');
