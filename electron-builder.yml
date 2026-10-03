@@ -22,6 +22,11 @@ files:
   # Debug symbols for the prebuilt natives — ~28 MB that nothing reads at
   # runtime. Excluded so the Windows installer isn't needlessly fat.
   - "!node_modules/**/*.pdb"
+  # Windows edition: no macOS payload. node-pty's npm package carries darwin
+  # prebuilds (Mach-O .node files and spawn-helper); none of it runs on
+  # Windows. scripts/verify-win-build.mjs fails the build if any gets in.
+  - "!node_modules/node-pty/prebuilds/darwin-*/**"
+  - "!**/*.dylib"
 # Both native modules ship N-API prebuilds — node-pty 1.1 builds against
 # node-addon-api and carries prebuilds/win32-x64 &c., and keytar publishes its
 # binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
