@@ -1,6 +1,10 @@
-# openDev
+# openDev — macOS edition
 
-**An AI-first IDE for macOS and Windows (two separate versions — see [Branches](#branches-macos-and-windows-are-separate-lines)) — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
+> **This branch (`mac-develop` / `mac-release`) is the macOS version of openDev and is built for the Mac only.**
+> The Windows version lives on `windows-develop` / `windows-release` and has its own README and release cadence.
+> See [Branches](#branches-macos-and-windows-are-separate-lines) for why they are separate.
+
+**An AI-first IDE for macOS — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes on Apple Silicon).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
 
 ---
 
@@ -48,6 +52,26 @@ How to work with them:
   don't merge `mac-*` and `windows-*` into each other wholesale.
 - The Windows installer job in CI runs on `windows-develop`, `windows-release`
   and on demand.
+
+---
+
+## How openDev uses macOS
+
+This version is written against macOS and leans on it directly — these are the
+places where it is a Mac app rather than a generic Electron app:
+
+| Area | What it uses on the Mac |
+|---|---|
+| **Window chrome** | Native `hiddenInset` title bar with the traffic-light buttons inset into the toolbar (`src/main/index.ts`, `src/main/windows.ts`); the standard macOS app menu (About / Settings ⌘, / Hide / Quit) |
+| **Shell & PATH** | Launched from Finder or the Dock, a Mac app gets a bare PATH. At startup openDev runs your login shell (`$SHELL`, default `/bin/zsh`) with `-ilc` to capture the real PATH, and adds `/opt/homebrew/bin` + `/usr/local/bin`, so `npm`, `node`, `python3`, `claude` and `git` resolve the same as in Terminal (`src/main/shellEnv.ts`). The integrated terminal opens that same login shell |
+| **Passwords** | Database passwords and API credentials go into the **macOS Keychain** via `keytar` — never into a config file |
+| **Ports** | The Ports panel and "free port" use `lsof` to find listening sockets and their owning processes (`src/main/ports.ts`) |
+| **Python** | Interpreter detection knows the Mac layouts: Homebrew on Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`), Apple's system Python, python.org framework builds, pyenv and conda (`src/main/python.ts`) |
+| **Apple Silicon / MLX** | The ML panel and local-model server drive Apple's **MLX** (`mlx_lm.lora`, `mlx_lm.server`), which runs only on Apple Silicon (`src/main/mlx.ts`, `src/main/localModels.ts`) |
+| **Finder** | "Reveal in Finder" on files, checkpoints and adapters (`shell.showItemInFolder`) |
+| **Settings location** | `~/Library/Application Support/openDev/` |
+| **Local network** | macOS 15+ blocks LAN traffic for apps that don't declare it. The app's Info.plist carries `NSLocalNetworkUsageDescription` + Bonjour service keys so connecting to databases/dev servers on 192.168.x.x / 10.x.x.x works; macOS asks once for permission |
+| **Signing** | Built as an arm64 `.dmg`, signed with a Developer ID under the **hardened runtime**. `build/entitlements.mac.plist` re-opens only what Electron/V8 need (JIT, unsigned executable memory, library validation) plus network client/server and user-selected file access. Notarization is a separate `xcrun notarytool` step on the DMG |
 
 ---
 
@@ -120,7 +144,8 @@ How to work with them:
 
 ### Requirements
 
-- macOS 13+ (Apple Silicon recommended; Intel works)
+- macOS 13+ (Apple Silicon recommended; Intel works, but the MLX panel needs Apple Silicon)
+- Xcode Command Line Tools (`xcode-select --install`) — for `git`, and for compiling native modules if a prebuild is missing
 - Node.js 20+ and npm
 - (Optional) `claude` CLI from Anthropic if you want the CLI streaming path
 - (Optional) `codex` CLI if you want OpenAI / Codex streaming
@@ -148,18 +173,12 @@ The build is unsigned by default. To ship it to other machines you'll want to se
 
 ### Windows
 
+Not built from this branch. The Windows version (NSIS / portable `.exe`) is
+developed on `windows-develop` and released from `windows-release`:
+
 ```bash
-npm run dist:win       # produces dist/OpenDev IDE-<version>-x64.exe (NSIS + portable)
+git checkout windows-develop
 ```
-
-Must be run **on** Windows — `keytar` and `@vscode/ripgrep` are per-platform
-natives, so cross-packaging from a Mac yields an installer that breaks at the
-first search. `.github/workflows/build.yml` does it on a `windows-latest`
-runner and uploads the installer as an artifact; the same workflow runs
-`scripts/smoke-headless.mjs`, which exercises the real main process — ports,
-PTY, git, ripgrep, Python detection — on Windows and macOS both.
-
-See **[WINDOWS.md](WINDOWS.md)** for what's platform-specific and why.
 
 ### Run it in a browser
 
