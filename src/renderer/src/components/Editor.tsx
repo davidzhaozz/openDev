@@ -51,7 +51,7 @@ function langForPath(path: string) {
     case 'json': case 'jsonl': return json();
     case 'css': case 'scss': return css();
     case 'html': case 'htm': return html();
-    case 'md': case 'mdx': return markdown();
+    case 'md': case 'mdx': case 'mmd': case 'mermaid': return markdown();
     case 'sql': return sql();
     case 'java': return java();
     case 'cs': case 'csx': return StreamLanguage.define(csharpLegacy);
@@ -234,9 +234,11 @@ type Props = {
   onChange: (s: string) => void;
   onSave: () => void;
   onJumpTo?: (path: string, line: number, col: number) => void;
+  /** 1-based line the caret sits on. Fires whenever the selection moves. */
+  onCaretLine?: (line: number) => void;
 };
 
-export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
+export function CodeEditor({ path, value, onChange, onSave, onJumpTo, onCaretLine }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [blameOn, setBlameOn] = useState(false);
@@ -252,9 +254,11 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onJumpToRef = useRef(onJumpTo);
+  const onCaretLineRef = useRef(onCaretLine);
   onChangeRef.current = onChange;
   onSaveRef.current = onSave;
   onJumpToRef.current = onJumpTo;
+  onCaretLineRef.current = onCaretLine;
   const pendingJump = useStore(s => s.pendingJump);
   const setPendingJump = useStore(s => s.setPendingJump);
   const setReferences = useStore(s => s.setReferences);
@@ -416,6 +420,10 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
           }
         }),
         EditorView.updateListener.of((u) => {
+          if (u.selectionSet || u.docChanged) {
+            const head = u.state.selection.main.head;
+            onCaretLineRef.current?.(u.state.doc.lineAt(head).number);
+          }
           if (u.docChanged) {
             onChangeRef.current(u.state.doc.toString());
             // Debounced LSP didChange notification so the server's view of

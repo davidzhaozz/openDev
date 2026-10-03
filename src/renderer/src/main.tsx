@@ -15,6 +15,9 @@ const params = new URLSearchParams(location.search);
 const popoutFlag = params.get('popout');
 const popoutPath = popoutFlag === '1' ? params.get('path') : null;
 const popoutAi = popoutFlag === 'ai';
+// Pop-outs use a native frame on Windows (main/windowChrome.ts), so the
+// caption-overlay spacing in global.css must not apply to them.
+if (popoutFlag) document.documentElement.dataset.popout = popoutFlag;
 
 function ApiMissing() {
   return (

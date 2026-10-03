@@ -41,10 +41,9 @@ export function DbConnectionsPanel({ drivers = DEFAULT_DRIVERS, title = 'Connect
     if (conns.some(c => c.id === sqlConnId)) return sqlConnId;
     return undefined;
   }, [sqlConnId, conns]);
-  const setSqlText = useStore(s => s.setSqlText);
-  const setSqlSource = useStore(s => s.setSqlSource);
+
   const openSqlTab = useStore(s => s.openSqlTab);
-  const triggerSqlRun = useStore(s => s.triggerSqlRun);
+
   const setEsText = useStore(s => s.setEsText);
   const openEsTab = useStore(s => s.openEsTab);
   const triggerEsRun = useStore(s => s.triggerEsRun);
@@ -168,32 +167,31 @@ export function DbConnectionsPanel({ drivers = DEFAULT_DRIVERS, title = 'Connect
     const sql = limit == null
       ? `SELECT *\nFROM ${ref};`
       : `SELECT *\nFROM ${ref}\nLIMIT ${limit};`;
-    // keepSource so the SqlSource we set below isn't immediately cleared
-    // by setSqlText's default "hand-edit detected" behavior.
-    setSqlText(sql, { keepSource: true });
-    if (activeConn && (activeConn.driver === 'mysql' || activeConn.driver === 'postgres')) {
-      setSqlSource({
-        driver: activeConn.driver,
-        schema: schemaName,
-        table: table.name,
-        columns: table.columns
-      });
-    } else {
-      setSqlSource(undefined);
-    }
-    openSqlTab();
-    if (opts.run) triggerSqlRun();
+    // Each table gets its own console — clicking a second table must not
+    // overwrite a query you are still reading.
+    const source = activeConn && (activeConn.driver === 'mysql' || activeConn.driver === 'postgres')
+      ? { driver: activeConn.driver, schema: schemaName, table: table.name, columns: table.columns }
+      : undefined;
+    openSqlTab({
+      connId: effectiveConnId,
+      text: sql,
+      source,
+      name: table.name,
+      run: opts.run
+    });
   };
 
   const countTable = (schemaName: string, table: DbTable) => {
     const ref = tableRef(schemaName, table);
     if (!ref) return;
     const sql = `SELECT COUNT(*) AS n FROM ${ref};`;
-    // COUNT returns one synthetic row — not editable, so clear the source.
-    setSqlText(sql);
-    setSqlSource(undefined);
-    openSqlTab();
-    triggerSqlRun();
+    // COUNT returns one synthetic row — not editable, so no source.
+    openSqlTab({
+      connId: effectiveConnId,
+      text: sql,
+      name: `count · ${table.name}`,
+      run: true
+    });
   };
 
   const tableMatches = (t: DbTable) => !filter || t.name.toLowerCase().includes(filter.toLowerCase()) ||

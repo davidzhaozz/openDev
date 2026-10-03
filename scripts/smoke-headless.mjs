@@ -2,7 +2,7 @@
 // Cross-platform smoke test for the IDE's main process.
 //
 // Unlike scripts/smoke.mjs — which re-implements the mechanics it checks —
-// this drives the *real* code. The web server in src/server/ runs every module
+// this drives the *real* code. The headless server in src/headless/ runs every module
 // under src/main/ on plain Node, so starting it and exercising its IPC
 // channels tests the actual filesystem, git, search, ports, terminal and
 // Python paths, on whatever OS the runner happens to be.
@@ -24,7 +24,7 @@ const WebSocket = require('ws');
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKSPACE = resolve(process.argv[2] || REPO);
-const SERVER = join(REPO, 'out-web', 'server', 'index.mjs');
+const SERVER = join(REPO, 'out-headless', 'index.mjs');
 const PORT = Number(process.env.SMOKE_PORT || 5288);
 
 let passed = 0;
@@ -44,7 +44,7 @@ async function check(name, fn) {
 function startServer() {
   return new Promise((resolveP, rejectP) => {
     if (!existsSync(SERVER)) {
-      rejectP(new Error(`${SERVER} missing — run "npm run web:build" first`));
+      rejectP(new Error(`${SERVER} missing — run "npm run build:headless" first`));
       return;
     }
     const proc = spawn(process.execPath, [SERVER, '--port', String(PORT), '--host', '127.0.0.1'], {

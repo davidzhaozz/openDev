@@ -20,6 +20,10 @@ async function getUndiciAgent(): Promise<((opts: any) => UndiciAgent) | null> {
   } catch { return null; }
 }
 import { IPC } from '@shared/ipc';
+import { netFetch } from './netlog.js';
+
+// Labels Elasticsearch/OpenSearch traffic as "es" in the NETWORK panel.
+const esHttp = netFetch('es');
 import type { DbConnectionProfile, DbResult, DbRowUpdate, DbUpdateResult, DbSchema, DbTable, DbColumn } from '@shared/types';
 import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
@@ -78,7 +82,7 @@ async function esFetch(
     if (make) dispatcher = make({ connect: { rejectUnauthorized: false } });
   }
   try {
-    const res = await fetch(url, {
+    const res = await esHttp(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

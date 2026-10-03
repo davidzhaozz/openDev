@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore, type DesignProposal } from '../state/store';
-import type { ChatAttachment, ChatMessage } from '../../../shared/types';
+import type { AiActivityMsg, ChatAttachment, ChatMessage } from '../../../shared/types';
 import { ModelCapabilityNote } from '../components/ModelCapabilityNote';
+import { Markdown } from '../components/ChatMarkdown';
 
 // Parses ```html-proposal:NAME blocks out of an assistant message. The
 // matching is line-anchored on the fence so we don't trip on stray ``` in
@@ -16,6 +17,18 @@ function extractDesignProposals(text: string): DesignProposal[] {
     if (name && html) out.push({ name, html });
   }
   return out;
+}
+
+// Chat text size, shared by every chat tab and remembered per machine.
+const CHAT_FONT_KEY = 'opendev.chatFontSize';
+const CHAT_FONT_MIN = 13;
+const CHAT_FONT_MAX = 24;
+function loadChatFontSize(): number {
+  try {
+    const n = Number(localStorage.getItem(CHAT_FONT_KEY));
+    if (n >= CHAT_FONT_MIN && n <= CHAT_FONT_MAX) return n;
+  } catch {}
+  return 16;
 }
 
 const MAX_BYTES = 4 * 1024 * 1024; // 4MB per file
@@ -58,6 +71,10 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   const [convId, setConvId] = useState<string | undefined>(initialConversationId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState('');
+  // Mirror for the stream listener, which subscribes once and would otherwise
+  // only ever see the initial empty string.
+  const streamingRef = useRef('');
+  streamingRef.current = streaming;
   const [text, setText] = useState('');
   const [transport, setTransportState] = useState<'claude-cli' | 'codex-cli' | 'opencode-cli'>('claude-cli');
   const providerLabel = transport === 'codex-cli' ? 'Codex' : transport === 'opencode-cli' ? 'OpenCode' : 'Claude';
@@ -67,10 +84,15 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   // an immediate re-read for any open chat tabs).
   const [aiLocalEnabled, setAiLocalEnabled] = useState(false);
   const [aiLocalModel, setAiLocalModel] = useState('');
+  // Claude Code model + reasoning effort. '' = CLI default.
+  const [claudeModel, setClaudeModelState] = useState('');
+  const [claudeEffort, setClaudeEffortState] = useState('');
   useEffect(() => {
     const load = () => window.opendev.settings.get().then(s => {
       setAiLocalEnabled(!!s.aiLocalEnabled);
       setAiLocalModel(s.aiLocalModel || '');
+      setClaudeModelState(s.claudeCliModel || '');
+      setClaudeEffortState(s.claudeCliEffort || '');
       // First-load: adopt the last-used transport so a fresh chat tab
       // defaults to whatever the user picked last, instead of always
       // snapping to Claude. Guarded by `!loadedTransport.current` so
@@ -104,12 +126,26 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
     setTransportState(t);
     window.opendev.settings.set({ lastAiTransport: t });
   };
+  const setClaudeModel = (m: string) => {
+    setClaudeModelState(m);
+    window.opendev.settings.set({ claudeCliModel: m });
+  };
+  const setClaudeEffort = (e: string) => {
+    setClaudeEffortState(e);
+    window.opendev.settings.set({ claudeCliEffort: e });
+  };
   // If the user disabled local AI while the chat had it selected, drop back
   // to Claude so the next send doesn't fire into a disabled transport.
   useEffect(() => {
     if (!aiLocalEnabled && transport === 'opencode-cli') setTransport('claude-cli');
   }, [aiLocalEnabled, transport]);
   const [sending, setSending] = useState(false);
+  const [fontSize, setFontSizeState] = useState(loadChatFontSize);
+  const setFontSize = (n: number) => {
+    const v = Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, n));
+    setFontSizeState(v);
+    try { localStorage.setItem(CHAT_FONT_KEY, String(v)); } catch {}
+  };
   const streamIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -169,7 +205,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
       if (streamIdRef.current !== streamId) return;
       if (c) setStreaming(s => s + c);
       if (done) {
-        const finalText = full || streaming;
+        const finalText = full || streamingRef.current;
         // Append final assistant message to local list.
         setMessages(prev => [...prev, {
           id: `local-${Date.now()}`,
@@ -181,6 +217,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
         setStreaming('');
         setSending(false);
         streamIdRef.current = null;
+        setActivity(settleActivity);
         // Auto-open design proposals if the assistant emitted them.
         const proposals = extractDesignProposals(finalText);
         if (proposals.length >= 2) {
@@ -198,10 +235,75 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-scroll on new content.
+  // Activity log: one row per tool call, fed by a side channel so the chat
+  // text is unaffected. Hidden unless the user opens it.
+  const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [activityOpen, setActivityOpen] = useState(false);
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, streaming]);
+    const off = window.opendev.ai.onActivity((m: AiActivityMsg) => {
+      if (streamIdRef.current !== m.streamId) return;
+      setActivity(prev => {
+        const i = prev.findIndex(r => r.id === m.id);
+        if (i < 0) {
+          if (!m.tool) return prev;
+          return [...prev, { id: m.id, tool: m.tool, target: m.target, status: m.status }].slice(-ACTIVITY_MAX);
+        }
+        const r = prev[i];
+        const next = prev.slice();
+        next[i] = {
+          ...r,
+          tool: m.tool || r.tool,
+          target: m.target ?? r.target,
+          // A late 'running' must not undo a finished call.
+          status: m.status === 'running' ? r.status : m.status
+        };
+        return next;
+      });
+    });
+    return off;
+  }, []);
+
+  // Auto-scroll: stay pinned to the bottom unless the user has scrolled up.
+  // Scrolling once per render isn't enough — bubbles keep growing after
+  // commit (markdown/code layout, images loading), and a hidden tab has no
+  // layout at all until it becomes active — so a ResizeObserver on the list
+  // and every bubble re-pins whenever the content height changes.
+  const pinnedRef = useRef(true);
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+  const onListScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  useLayoutEffect(() => {
+    if (pinnedRef.current) scrollToBottom();
+  }, [messages, streaming, sending]);
+
+  useEffect(() => {
+    if (!active) return;
+    pinnedRef.current = true;
+    scrollToBottom();
+    const raf = requestAnimationFrame(scrollToBottom);
+    return () => cancelAnimationFrame(raf);
+  }, [active]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => { if (pinnedRef.current) scrollToBottom(); });
+    ro.observe(el);
+    Array.from(el.children).forEach(c => ro.observe(c));
+    const mo = new MutationObserver(records => {
+      for (const r of records) r.addedNodes.forEach(n => { if (n instanceof Element) ro.observe(n); });
+      if (pinnedRef.current) scrollToBottom();
+    });
+    mo.observe(el, { childList: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
 
   // When user clicks "Choose this" on a design proposal: pre-fill composer
   // in the active AI tab. We gate on `active` so only the visible tab grabs
@@ -229,6 +331,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
       try { await window.opendev.ai.cancel(streamIdRef.current); } catch {}
       streamIdRef.current = null;
       setStreaming('');
+      setActivity(settleActivity);
     }
     const userMsg: ChatMessage = {
       id: `local-${Date.now()}`,
@@ -237,8 +340,14 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
       attachments: attachments.length ? attachments : undefined,
       createdAt: Date.now()
     };
+    // Sending always jumps back to the bottom, even if the user had scrolled up.
+    pinnedRef.current = true;
     setMessages(prev => [...prev, userMsg]);
     setSending(true);
+    // Separate this request's calls from the previous one's.
+    setActivity(prev => prev.length && !prev[prev.length - 1].divider
+      ? [...prev, { id: `turn-${Date.now()}`, tool: '', status: 'ok', divider: true }]
+      : prev);
     try {
       const root = useStore.getState().workspaceRoot;
       const tabs = useStore.getState().centerTabs;
@@ -260,7 +369,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
         }))
       };
       inFlightProviderRef.current = transport === 'codex-cli' ? 'codex' : transport === 'opencode-cli' ? 'opencode' : 'claude';
-      const r = await window.opendev.ai.send({ conversationId: convId, text: body, attachments, transport, context });
+      const r = await window.opendev.ai.send({ conversationId: convId, text: body, attachments, transport, context, model: claudeModel || undefined, effort: claudeEffort || undefined });
       streamIdRef.current = r.streamId;
       // If main came back with a different id (it does when our convId was
       // stale and main recovered into a fresh conversation), or we had no
@@ -363,10 +472,11 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
   };
 
   return (
-    <div className="panel chat chat-center">
+    <div className="panel chat chat-center" style={{ ['--chat-font-size' as string]: `${fontSize}px` }}>
       {sending && (
         <div className="chat-banner">
-          <span>
+          <span className="chat-banner-status">
+            <span className="chat-banner-dot" aria-hidden />
             {providerLabel} is responding{streaming ? '' : ' (waiting for first chunk)'}…
           </span>
           <span className="chat-banner-hint">
@@ -374,7 +484,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
           </span>
         </div>
       )}
-      <div className="chat-list" ref={scrollRef} onClick={focusComposer}>
+      <div className="chat-list" ref={scrollRef} onScroll={onListScroll} onClick={focusComposer}>
         {messages.map(m => <ChatBubble key={m.id} message={m} fallbackProviderLabel={providerLabel} />)}
         {streaming && <ChatBubble key="streaming" message={{
           id: 'streaming', role: 'assistant', text: streaming, createdAt: Date.now(),
@@ -387,6 +497,8 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
           </div>
         )}
       </div>
+
+      {activityOpen && <ActivityLog rows={activity} onClose={() => setActivityOpen(false)} />}
 
       <div className="composer">
         {transport === 'opencode-cli' && aiLocalModel && (
@@ -471,7 +583,54 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
             )}
           </select>
 
+          {transport === 'claude-cli' && (
+            <>
+              <select
+                className="composer-transport"
+                value={claudeModel}
+                onChange={(e) => setClaudeModel(e.target.value)}
+                title="Claude model"
+              >
+                <option value="">Model: default</option>
+                <option value="claude-fable-5-1">Fable 5.1</option>
+                <option value="claude-opus-5-5">Opus 5.5</option>
+                <option value="claude-sonnet-5">Sonnet 5</option>
+                <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+              </select>
+              <select
+                className="composer-transport"
+                value={claudeEffort}
+                onChange={(e) => setClaudeEffort(e.target.value)}
+                title="Reasoning effort"
+              >
+                <option value="">Reasoning: default</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Max</option>
+              </select>
+            </>
+          )}
+
           <span className="composer-spacer" />
+
+          {activity.some(r => !r.divider) && (
+            <button
+              className={`composer-activity${activityOpen ? ' on' : ''}`}
+              onClick={() => setActivityOpen(o => !o)}
+              title={activityOpen ? 'Hide the activity log' : 'Show which files and tools the AI is using'}
+              aria-expanded={activityOpen}
+            >
+              {sending && activity.some(r => r.status === 'running') && <span className="composer-activity-dot" aria-hidden />}
+              Activity {activity.filter(r => !r.divider).length}
+            </button>
+          )}
+
+          <span className="composer-size">
+            <button onClick={() => setFontSize(fontSize - 1)} disabled={fontSize <= CHAT_FONT_MIN} title="Smaller chat text" aria-label="Smaller text">A−</button>
+            <button onClick={() => setFontSize(fontSize + 1)} disabled={fontSize >= CHAT_FONT_MAX} title="Bigger chat text" aria-label="Bigger text">A+</button>
+          </span>
 
           {canStop && (
             <button
@@ -481,6 +640,7 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
                 streamIdRef.current = null;
                 setSending(false);
                 setStreaming('');
+                setActivity(settleActivity);
               }}
               title="Stop the current response"
               aria-label="Stop"
@@ -505,28 +665,111 @@ export function AIChat({ tabId, initialConversationId, active, initialPrompt }: 
 }
 
 // =====================================================================
-// ChatBubble — renders one message with role-distinct visual style and a
-// light markdown pass (code fences, inline code, bold/italic, lists).
+// Activity log — the optional per-tab list of tool calls and their targets.
 // =====================================================================
 
-function ChatBubble({ message, streaming, fallbackProviderLabel }: { message: ChatMessage; streaming?: boolean; fallbackProviderLabel: string }) {
+type ActivityRow = {
+  id: string;
+  tool: string;
+  target?: string;
+  status: AiActivityMsg['status'] | 'stopped';
+  divider?: boolean;
+};
+const ACTIVITY_MAX = 300;
+const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+// When a response ends, anything still "running" never reported back.
+function settleActivity(rows: ActivityRow[]): ActivityRow[] {
+  return rows.some(r => r.status === 'running')
+    ? rows.map(r => r.status === 'running' ? { ...r, status: 'stopped' } : r)
+    : rows;
+}
+
+function relativeTo(root: string | null | undefined, p: string): string {
+  if (!root) return p;
+  const norm = (s: string) => s.replace(/\\/g, '/').toLowerCase();
+  const r = norm(root).replace(/\/+$/, '') + '/';
+  return norm(p).startsWith(r) ? p.slice(r.length) : p;
+}
+
+function ActivityLog({ rows, onClose }: { rows: ActivityRow[]; onClose: () => void }) {
+  const root = useStore(s => s.workspaceRoot);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const pinned = useRef(true);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [rows]);
+  const open = async (path: string) => {
+    try {
+      const content = await window.opendev.fs.read(path);
+      useStore.getState().openFileTab(path, content);
+    } catch (e: any) {
+      useStore.getState().showToast(`Couldn't open ${path}: ${e?.message || e}`, 3000);
+    }
+  };
+  return (
+    <div className="chat-activity">
+      <div className="chat-activity-head">
+        <span>Activity</span>
+        <button onClick={onClose} title="Hide" aria-label="Hide activity log">×</button>
+      </div>
+      <div
+        className="chat-activity-list"
+        ref={listRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
+        }}
+      >
+        {rows.map(r => {
+          if (r.divider) return <div key={r.id} className="chat-activity-divider" />;
+          const isFile = FILE_TOOLS.has(r.tool) && !!r.target;
+          const icon = r.status === 'running' ? '…' : r.status === 'ok' ? '✓' : r.status === 'error' ? '✗' : '–';
+          return (
+            <div key={r.id} className={`chat-activity-row ${r.status}`}>
+              <span className="chat-activity-icon" aria-label={r.status}>{icon}</span>
+              <span className="chat-activity-tool">{r.tool}</span>
+              {r.target && (isFile
+                ? <button className="chat-activity-target file" onClick={() => open(r.target!)} title={`Open ${r.target}`}>{relativeTo(root, r.target)}</button>
+                : <span className="chat-activity-target" title={r.target}>{r.target}</span>)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// ChatBubble — renders one message with role-distinct visual style. The
+// markdown itself lives in components/ChatMarkdown.
+// =====================================================================
+
+// Memoized: during a stream only the live bubble changes, so the settled
+// history must not re-parse its markdown on every flushed chunk.
+const ChatBubble = memo(function ChatBubble({ message, streaming, fallbackProviderLabel }: { message: ChatMessage; streaming?: boolean; fallbackProviderLabel: string }) {
   const isUser = message.role === 'user';
   // Prefer the provider stamped on the message itself (so old turns retain
   // their original label after the user switches transports). Fall back to
   // the composer's current label for legacy messages without `provider`.
   const messageProviderLabel = message.provider === 'codex' ? 'Codex' :
-    message.provider === 'claude' ? 'Claude' : fallbackProviderLabel;
+    message.provider === 'claude' ? 'Claude' :
+    message.provider === 'opencode' ? 'OpenCode' : fallbackProviderLabel;
+  const isError = !isUser && message.text.startsWith('[error]');
   return (
     <div className={`bubble-row ${isUser ? 'user' : 'assistant'}`}>
-      <div className="bubble-avatar" aria-hidden>{isUser ? 'You' : 'AI'}</div>
-      <div className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}>
+      <div className={`bubble-avatar${isUser ? '' : ` provider-${messageProviderLabel.toLowerCase()}`}`} aria-hidden>
+        {isUser ? 'You' : messageProviderLabel.slice(0, 1)}
+      </div>
+      <div className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}${isError ? ' bubble-error' : ''}`}>
         <div className="bubble-meta">
           <span className="bubble-role">{isUser ? 'You' : messageProviderLabel}</span>
           <span className="bubble-time">{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-          {streaming && <span className="bubble-streaming">●</span>}
+          {streaming && <span className="bubble-streaming">● writing</span>}
         </div>
         <div className="bubble-body">
-          <RenderedMarkdown text={message.text} />
+          <Markdown text={message.text} />
         </div>
         {message.attachments && message.attachments.length > 0 && (
           <div className="bubble-attachments">
@@ -542,117 +785,4 @@ function ChatBubble({ message, streaming, fallbackProviderLabel }: { message: Ch
       </div>
     </div>
   );
-}
-
-// Minimal markdown renderer — fenced code blocks, inline code,
-// bold/italic, bullet lists, and tool-trace lines from the stream-json
-// parser. We avoid pulling in a heavy markdown library; the chat doesn't
-// need full CommonMark and this keeps the bundle lean.
-function RenderedMarkdown({ text }: { text: string }) {
-  // Split on triple-backtick fences first so we never apply inline
-  // formatting inside code blocks.
-  const segments: Array<{ kind: 'code'; lang: string; body: string } | { kind: 'text'; body: string }> = [];
-  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) segments.push({ kind: 'text', body: text.slice(last, m.index) });
-    segments.push({ kind: 'code', lang: m[1].trim(), body: m[2] });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) segments.push({ kind: 'text', body: text.slice(last) });
-
-  return (
-    <>
-      {segments.map((s, i) => s.kind === 'code'
-        ? <CodeBlock key={i} lang={s.lang} body={s.body} />
-        : <InlineText key={i} body={s.body} />)}
-    </>
-  );
-}
-
-function CodeBlock({ lang, body }: { lang: string; body: string }) {
-  const showCopy = body.length > 0;
-  const copy = () => {
-    try { navigator.clipboard.writeText(body); } catch {}
-  };
-  return (
-    <div className="md-code">
-      <div className="md-code-head">
-        <span className="md-code-lang">{lang || 'code'}</span>
-        {showCopy && <button className="md-code-copy" onClick={copy}>Copy</button>}
-      </div>
-      <pre><code>{body}</code></pre>
-    </div>
-  );
-}
-
-// Renders one "text" segment with: inline code (`x`), bold (**x**),
-// italic (*x*), bullet lists, and the tool-trace markers we emit from
-// ai.ts (`› using tool:` and `  ↳ result`).
-function InlineText({ body }: { body: string }) {
-  // Render line by line so list/tool-trace formatting works.
-  const lines = body.split('\n');
-  return (
-    <>
-      {lines.map((line, i) => {
-        const trimmed = line.trimStart();
-        if (/^›\s+using tool:/i.test(trimmed)) {
-          return <div key={i} className="md-tool-call">{trimmed}</div>;
-        }
-        if (/^↳\s/.test(trimmed) || /^\s+↳\s/.test(line)) {
-          return <div key={i} className="md-tool-result">{trimmed}</div>;
-        }
-        if (/^[-*]\s+/.test(trimmed)) {
-          return <div key={i} className="md-li">• {renderInline(trimmed.replace(/^[-*]\s+/, ''))}</div>;
-        }
-        if (/^\d+\.\s+/.test(trimmed)) {
-          return <div key={i} className="md-li">{trimmed.match(/^\d+/)?.[0]}. {renderInline(trimmed.replace(/^\d+\.\s+/, ''))}</div>;
-        }
-        if (line === '') return <br key={i} />;
-        return <div key={i} className="md-line">{renderInline(line)}</div>;
-      })}
-    </>
-  );
-}
-
-function renderInline(s: string) {
-  // Tokenize: inline code (`x`), bold (**x**), italic (*x*), then plain.
-  const parts: Array<JSX.Element | string> = [];
-  let i = 0;
-  let buf = '';
-  const flush = () => { if (buf) { parts.push(buf); buf = ''; } };
-  while (i < s.length) {
-    if (s[i] === '`') {
-      const end = s.indexOf('`', i + 1);
-      if (end > i) {
-        flush();
-        parts.push(<code key={parts.length} className="md-inline-code">{s.slice(i + 1, end)}</code>);
-        i = end + 1;
-        continue;
-      }
-    }
-    if (s[i] === '*' && s[i + 1] === '*') {
-      const end = s.indexOf('**', i + 2);
-      if (end > i) {
-        flush();
-        parts.push(<strong key={parts.length}>{s.slice(i + 2, end)}</strong>);
-        i = end + 2;
-        continue;
-      }
-    }
-    if (s[i] === '*') {
-      const end = s.indexOf('*', i + 1);
-      if (end > i) {
-        flush();
-        parts.push(<em key={parts.length}>{s.slice(i + 1, end)}</em>);
-        i = end + 1;
-        continue;
-      }
-    }
-    buf += s[i];
-    i++;
-  }
-  flush();
-  return <>{parts}</>;
-}
+});

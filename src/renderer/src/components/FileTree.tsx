@@ -325,6 +325,12 @@ export function FileTree({ root, onOpen }: Props) {
             openTerminalTab({ cwd: target, name: ctx.node.name });
             setCtx(null);
           }}>Start Terminal Here</div>}
+          {ctx.node.isDir && <div className="item" onClick={() => {
+            const target = ctx.node.path;
+            const name = ctx.node.name;
+            setCtx(null);
+            setModal('find', { dir: target, name });
+          }}>Find in Folder…</div>}
           {ctx.node.isDir && <div className="item" onClick={async () => {
             const target = ctx.node.path;
             setCtx(null);

@@ -29,6 +29,8 @@ class Workspace {
     if (!this.root) return;
     await this.stopWatchers();
     this.root = undefined;
+    // Release the Jira store watcher along with the root it was watching.
+    import('./jira.js').then((j) => j.syncStoreWatcher()).catch(() => {});
     await patchSettings({ workspaceRoot: undefined });
     safeSend(IPC.WorkspaceChanged, undefined);
   }
@@ -54,6 +56,9 @@ class Workspace {
     // EMFILE crashes a few seconds in. We instead use a shallow fs.watch and
     // ask the renderer to refresh expanded directories on demand.
     this.watchDir(path);
+    // The Jira store watcher is rooted at the workspace too, and must follow it
+    // or the panel stops seeing external edits to .opendev/jira.json.
+    import('./jira.js').then((j) => j.syncStoreWatcher()).catch(() => {});
     safeSend(IPC.WorkspaceChanged, path);
   }
 

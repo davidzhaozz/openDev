@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import { LogPanel } from '../panels/LogPanel';
 import { DebugPanel } from '../panels/DebugPanel';
 import { RunPanel } from '../panels/RunPanel';
+import { ScreenRecorder } from './ScreenRecorder';
 import type { SystemStats } from '../../../shared/types';
 
 // Application bottom bar — hosts LOG and DEBUG panels that used to live in
@@ -32,6 +33,7 @@ export function BottomBar() {
           </div>
         ))}
         <span className="grow" />
+        <ScreenRecorder />
         <FreeMemoryButton />
         <SystemStatsChip />
         <button

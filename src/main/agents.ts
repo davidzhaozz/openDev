@@ -9,12 +9,21 @@ import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { resolveBinPath } from './ai.js';
 import { BUILTIN_AGENTS, BUILTIN_SLUGS } from './defaultAgents.js';
-import { spawnBin } from './platform.js';
+import { cliChildEnv, spawnBin, detachedSpawnOptions, killTree } from './platform.js';
+import { onShutdown } from './lifecycle.js';
 
 // Each agent is a self-contained Node.js app under .opendev/agents/<slug>/.
 // This module is the manifest store + run manager, modeled on services.ts.
 
 const LOG_TAIL = 2000;
+
+/**
+ * runAndCollect's children, which never enter `runs` because they're awaited
+ * rather than tracked. They still need reaping at quit — `ide_run_agent` is
+ * the path the chat model uses, so these are exactly the processes left
+ * behind when the IDE is closed mid-answer.
+ */
+const transient = new Set<ChildProcess>();
 
 // Starter entry file written for AI-created (blank) agents. Documents the
 // runtime contract inline so a hand-edited agent stays correct.
@@ -257,8 +266,12 @@ class AgentManager {
   private resolveAgentCommand(
     manifest: AgentManifest, dir: string, entryAbs: string, root: string
   ): { cmd: string; args: string[]; env: Record<string, string> } {
+    // cliChildEnv, not process.env: an agent's whole job is to drive a CLI,
+    // usually `claude`, so it needs the same credential-store pinning the
+    // chat path gets — ~/.claude resolved from the real home, no inherited
+    // CLAUDE_CONFIG_DIR.
     const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
+      ...cliChildEnv(),
       OPENDEV_WORKSPACE_ROOT: root,
       OPENDEV_AGENT_DIR: dir,
       FORCE_COLOR: '1'
@@ -300,15 +313,18 @@ class AgentManager {
       const onData = (b: Buffer) => { if (output.length < cap) output += b.toString('utf8'); };
       proc.stdout?.on('data', onData);
       proc.stderr?.on('data', onData);
-      const t = setTimeout(() => { timedOut = true; try { proc.kill('SIGTERM'); } catch {} }, timeoutMs);
-      proc.on('exit', (code) => {
+      // Tree kill on timeout: the agent's job is to drive `claude`, so the
+      // process that actually holds the memory is a grandchild. Killing only
+      // the direct child left it running with nothing reading its output.
+      const t = setTimeout(() => { timedOut = true; void killTree(proc.pid ?? 0, true); }, timeoutMs);
+      transient.add(proc);
+      const settle = (r: { output: string; exitCode: number | null; timedOut: boolean }) => {
         clearTimeout(t);
-        resolveP({ output: output.slice(0, cap), exitCode: code, timedOut });
-      });
-      proc.on('error', (e) => {
-        clearTimeout(t);
-        resolveP({ output: output + `\n[spawn error] ${e.message}`, exitCode: -1, timedOut });
-      });
+        transient.delete(proc);
+        resolveP(r);
+      };
+      proc.on('exit', (code) => settle({ output: output.slice(0, cap), exitCode: code, timedOut }));
+      proc.on('error', (e) => settle({ output: output + `\n[spawn error] ${e.message}`, exitCode: -1, timedOut }));
     });
   }
 
@@ -333,7 +349,11 @@ class AgentManager {
     const streamId = runId;
     const proc = spawnBin(cmd, args, {
       cwd: root,
-      detached: true,
+      // detachedSpawnOptions, not `detached: true`: on Windows that flag means
+      // "survive the parent", which is the opposite of what we want — it made
+      // every agent run outlive the IDE. On POSIX it still gives us the
+      // process group. See the helper for the platform split.
+      ...detachedSpawnOptions(),
       stdio: ['ignore', 'pipe', 'pipe'],
       env
     });
@@ -384,6 +404,16 @@ class AgentManager {
     return run;
   }
 
+  /** Pids of local runs still executing, for the shutdown reaper. */
+  livePids(): number[] {
+    const pids: number[] = [];
+    for (const r of this.runs.values()) {
+      if (r.proc.exitCode == null && r.proc.pid) pids.push(r.proc.pid);
+    }
+    this.runs.clear();
+    return pids;
+  }
+
   async stop(runId: string): Promise<boolean> {
     const r = this.runs.get(runId);
     if (!r) {
@@ -392,21 +422,36 @@ class AgentManager {
       return stopRemoteRun(runId);
     }
     const pid = r.proc.pid;
-    const killGroup = (sig: NodeJS.Signals) => {
-      try { if (pid) process.kill(-pid, sig); }
-      catch { try { r.proc.kill(sig); } catch {} }
-    };
-    if (r.proc.exitCode == null) killGroup('SIGTERM');
+    // killTree, not `process.kill(-pid)`: negative pids are a POSIX
+    // process-group thing that throws on Windows, and the fallback
+    // (`proc.kill()`) reaches only the direct child — so the agent's own
+    // `claude` grandchildren survived every stop.
+    if (r.proc.exitCode == null) await killTree(pid ?? 0, false);
     await new Promise<void>((resolve) => {
       if (r.proc.exitCode != null) return resolve();
-      const t = setTimeout(() => { killGroup('SIGKILL'); resolve(); }, 4000);
+      const t = setTimeout(() => { void killTree(pid ?? 0, true).then(resolve); }, 4000);
       r.proc.once('exit', () => { clearTimeout(t); resolve(); });
     });
+    this.runs.delete(runId);
     return true;
   }
 }
 
 export const agentManager = new AgentManager();
+
+// Agent runs are spawned processes the OS does not tie to us, so without this
+// they outlived the IDE — and because an agent's whole job is to drive the
+// Claude CLI, each orphan kept a CLI alive behind it. Same fix ai.ts already
+// has for the chat path.
+onShutdown(async () => {
+  const pids = agentManager.livePids();
+  const extra = [...transient];
+  transient.clear();
+  await Promise.all([
+    ...pids.map((pid) => killTree(pid, true)),
+    ...extra.map((p) => killTree(p.pid ?? 0, true))
+  ]);
+});
 
 export function registerAgentsIpc() {
   ipcMain.handle(IPC.AgentsList, () => agentManager.list());

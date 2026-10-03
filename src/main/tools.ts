@@ -1,9 +1,11 @@
 import { ipcMain } from 'electron';
-import { spawn, execSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
+import { readFileSync } from 'fs';
+import { basename, dirname, join } from 'path';
 import { safeSend } from './safeSend.js';
 import { LIMITS, tail } from './limits.js';
 import type { InstallableTool, ToolInstallResult } from '@shared/types';
-import { spawnBin, hasBin, IS_WIN } from './platform.js';
+import { spawnBin, hasBin, resolveBinPath, IS_WIN } from './platform.js';
 
 // `brew` on macOS, `winget` on Windows — the field is named for the macOS
 // case because that's what the renderer has always keyed off; on Windows it
@@ -18,11 +20,52 @@ function packageManager(): 'brew' | 'winget' | null {
   return which('brew') ? 'brew' : null;
 }
 
-function version(cmd: string, flag = '--version'): string | undefined {
+/**
+ * Version string for a CLI, without ever going through a shell.
+ *
+ * This used to be `execSync('npm --version')`. The string form of execSync
+ * runs everything through `cmd.exe /d /s /c` on Windows, so simply opening a
+ * workspace spawned two cmd.exe processes out of the GUI app — which is a
+ * textbook EDR detection ("interpreter spawned by GUI application") and had
+ * SentinelOne alerting on every single launch.
+ *
+ * Now: resolve to an absolute path, then read the version off disk for shim
+ * commands and spawn the binary directly for real executables. No shell in
+ * either path.
+ */
+export function version(cmd: string, flag = '--version'): string | undefined {
+  const abs = resolveBinPath(cmd);
+  if (!abs) return undefined;
+  // `npm`, `npx`, `tsx` and friends are .cmd shims on Windows, and a batch
+  // file cannot be executed without a shell. Their package.json is right
+  // there next to the shim, so read it rather than paying for a cmd.exe.
+  if (/\.(cmd|bat)$/i.test(abs)) return versionFromPackage(abs);
   try {
-    const r = execSync(`${cmd} ${flag}`, { encoding: 'utf8', env: process.env, timeout: 2000, windowsHide: true });
+    const r = execFileSync(abs, [flag], {
+      encoding: 'utf8', env: process.env, timeout: 2000, windowsHide: true
+    });
     return r.trim().split('\n')[0];
   } catch { return undefined; }
+}
+
+/** Read `version` from the package.json that belongs to a .cmd shim. */
+function versionFromPackage(shim: string): string | undefined {
+  const dir = dirname(shim);
+  const name = basename(shim).replace(/\.(cmd|bat)$/i, '');
+  const candidates = [
+    // A portable/zip Node unpack keeps npm.cmd and node_modules/ side by side;
+    // a global npm prefix (AppData\Roaming\npm) puts node_modules one level up.
+    join(dir, 'node_modules', name, 'package.json'),
+    join(dir, '..', 'node_modules', name, 'package.json'),
+    join(dir, 'node_modules', name, 'lib', 'package.json')
+  ];
+  for (const p of candidates) {
+    try {
+      const v = JSON.parse(readFileSync(p, 'utf8'))?.version;
+      if (v) return String(v);
+    } catch { /* try the next layout */ }
+  }
+  return undefined;
 }
 
 export function registerToolsIpc() {

@@ -33,6 +33,15 @@ files:
 # dependency entirely; if a future dependency is NAN-based rather than N-API,
 # this has to come back on and the runner needs a working MSVC.
 npmRebuild: false
+# The resident PowerShell process-table host (src/main/psHost.ts) runs this with
+# -File, and PowerShell cannot open a path inside the asar. extraResources puts
+# it straight into <resourcesPath>, so it is a real file on disk with no
+# unpacking dance. afterPack Authenticode-signs it with the same certificate as
+# the binaries — see scripts/sign-ps1.mjs.
+extraResources:
+  - from: resources/procmap.ps1
+    to: procmap.ps1
+afterPack: scripts/sign-ps1.mjs
 asarUnpack:
   - "**/*.node"
   # node-pty needs more than its .node files on Windows: ConPTY loads
@@ -75,6 +84,7 @@ mac:
     # (192.168.x.x / 10.x.x.x / 172.16-31.x.x) for apps that don't declare
     # local-network usage. Without these keys, connecting to LAN DBs from a
     # Finder-launched .app returns EHOSTUNREACH even when the host is up.
+    NSMicrophoneUsageDescription: "OpenDev IDE records your microphone when you start a screen recording, so the capture has your narration."
     NSLocalNetworkUsageDescription: "OpenDev IDE connects to development services (databases, dev servers) running on your local network."
     NSBonjourServices:
       - _http._tcp
@@ -92,9 +102,17 @@ win:
     - target: portable
       arch:
         - x64
-  # Unsigned. Windows SmartScreen will warn on first run until these are signed
-  # with an EV or OV code-signing certificate — set CSC_LINK / CSC_KEY_PASSWORD
-  # in the environment to sign at build time.
+  # Signing is driven entirely by the environment: electron-builder signs the
+  # binaries whenever CSC_LINK (path to a .pfx) and CSC_KEY_PASSWORD are set,
+  # and silently produces unsigned output when they are not. `.  scripts\win-sign-env.ps1`
+  # points them at the local development certificate; swapping in a purchased
+  # OV/EV certificate is a matter of replacing that .pfx and password, with no
+  # change here.
+  #
+  # A self-signed certificate does NOT satisfy SmartScreen, which is reputation-
+  # based — it gives the build a stable signer identity so an EDR exclusion can
+  # be written against the certificate rather than against a hash that changes
+  # on every build. Only a purchased OV/EV certificate quiets SmartScreen.
   artifactName: ${productName}-${version}-${arch}.${ext}
 portable:
   # Without its own name the portable target renders to the same

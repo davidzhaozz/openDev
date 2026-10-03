@@ -58,15 +58,30 @@ const topLargest = largest.slice(0, 10);
 const codeFileCount = largest.length;
 
 // ── ESLint (only if installed in the workspace) ──────────────────────
-const eslintBin = path.join(ROOT, 'node_modules', '.bin', 'eslint');
-const eslintAvailable = fs.existsSync(eslintBin);
+// Resolve ESLint's own JS entry rather than the node_modules/.bin shim.
+// On Windows .bin holds three files per tool — an extensionless shell script
+// plus .CMD and .ps1 — and the extensionless one exists, so a bare existsSync
+// reports "installed" while execFileSync on it fails with ENOENT: CreateProcess
+// can only run a real executable, not a shell script. Invoking the .js with the
+// interpreter already running this agent skips the shims and behaves the same
+// on every platform.
+const eslintEntry = [
+  path.join(ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js')
+].find((p) => fs.existsSync(p)) ?? null;
+const eslintAvailable = eslintEntry !== null;
 let eslintResults = null;
 let eslintError = null;
 if (eslintAvailable) {
   try {
-    const out = execFileSync(eslintBin, ['.', '--format', 'json', '--no-error-on-unmatched-pattern'], {
-      cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']
-    });
+    const out = execFileSync(
+      process.execPath,
+      [eslintEntry, '.', '--format', 'json', '--no-error-on-unmatched-pattern'],
+      {
+        cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+        // Agents run under Electron; this keeps the child a plain Node process.
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      }
+    );
     eslintResults = JSON.parse(out);
   } catch (err) {
     // ESLint exits 1 when it finds lint problems — the JSON is still on stdout.

@@ -47,7 +47,15 @@ export const LIMITS = {
 
   // RSS watchdog thresholds for the main process (bytes).
   rssWarnBytes: 2 * 1024 * 1024 * 1024,     // 2 GB → toast
-  rssCriticalBytes: 3 * 1024 * 1024 * 1024  // 3 GB → toast + log
+  rssCriticalBytes: 3 * 1024 * 1024 * 1024, // 3 GB → toast + log
+
+  // Ticket runs allowed to hold a live Claude CLI at once; the rest queue.
+  // Each run is a full CLI process (~350 MB RSS here) plus whatever its own
+  // Bash/tool grandchildren spawn, so this is a memory limit, not a politeness
+  // one. `ide_jira_start` is fire-and-forget over MCP, so without a cap the
+  // chat model can start a whole 100-ticket board in one turn and the machine
+  // goes to swap.
+  jiraConcurrentRuns: 2
 } as const;
 
 // Helper used by buffer-cap sites. Returns the (possibly truncated) string

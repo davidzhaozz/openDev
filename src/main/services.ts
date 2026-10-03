@@ -8,12 +8,16 @@ import { IPC } from '@shared/ipc';
 import type { ServiceDef, ServiceRuntime, ServiceStatus } from '@shared/types';
 import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
-import { freePort, listListeningPorts } from './ports.js';
-import { IS_WIN, commandShell, descendantPids, detachedSpawnOptions, killTree } from './platform.js';
+import { freePort, listListeningPorts, listListeningPortsFast } from './ports.js';
+import { IS_WIN, commandShell, descendantPids, descendantsOf, detachedSpawnOptions, killTree, processParentMap } from './platform.js';
 import { safeSend } from './safeSend.js';
 import { baseName, isWithin } from '@shared/paths';
 
 const pexec = promisify(exec);
+
+// How long a previously-seen port survives polls that don't see it. Covers a
+// dev-server restart without pinning a port that has genuinely been released.
+const STALE_PORT_MS = 15000;
 
 // Which ports is this service actually holding? On POSIX the spawned shell
 // and its children share a process group, so lsof can filter by it directly.
@@ -22,8 +26,10 @@ const pexec = promisify(exec);
 async function listeningPortsForService(rootPid: number): Promise<number[]> {
   if (IS_WIN) {
     try {
-      const pids = new Set(await descendantPids(rootPid));
-      const listeners = await listListeningPorts();
+      const walked = await descendantPids(rootPid);
+      if (!walked) return [];
+      const pids = new Set(walked);
+      const listeners = await listListeningPortsFast();
       const ports = new Set(listeners.filter((l) => pids.has(l.pid)).map((l) => l.port));
       return [...ports].sort((a, b) => a - b);
     } catch {
@@ -151,15 +157,33 @@ class ServiceManager {
       try { return await fs.readFile(join(norm, f), 'utf8'); } catch { return null; }
     };
 
-    // 1. Node / npm — pick the most "run"-like script.
+    // 1. Node — pick the most "run"-like script, run through the package
+    // manager the project actually uses. A pnpm/yarn workspace member gets
+    // its deps as symlinks the other managers won't reproduce, so guessing
+    // `npm` here produces a service that fails on its first run.
     const pkgRaw = await read('package.json');
     if (pkgRaw) {
       try {
         const scripts = (JSON.parse(pkgRaw).scripts || {}) as Record<string, string>;
-        let command = 'npm start';
-        if (scripts.dev) command = 'npm run dev';
-        else if (scripts.start) command = 'npm run start';
-        else if (scripts.serve) command = 'npm run serve';
+        // The lockfile is the truth, and in a monorepo it sits at the root,
+        // not in the member directory — check both.
+        const lockIn = async (dir: string, file: string): Promise<boolean> => {
+          try { await fs.access(join(dir, file)); return true; } catch { return false; }
+        };
+        const pmFor = async (): Promise<string> => {
+          for (const dir of norm === root ? [root] : [norm, root]) {
+            if (await lockIn(dir, 'pnpm-lock.yaml')) return 'pnpm';
+            if (await lockIn(dir, 'yarn.lock')) return 'yarn';
+            if (await lockIn(dir, 'bun.lockb')) return 'bun';
+            if (await lockIn(dir, 'package-lock.json')) return 'npm';
+          }
+          return 'npm';
+        };
+        const pm = await pmFor();
+        let command = `${pm} start`;
+        if (scripts.dev) command = `${pm} run dev`;
+        else if (scripts.start) command = `${pm} run start`;
+        else if (scripts.serve) command = `${pm} run serve`;
         return { name, command, cwd };
       } catch {
         // Malformed package.json — fall through to other detectors.
@@ -419,14 +443,63 @@ class ServiceManager {
     return [...this.runtimes.values()].map(r => r.runtime);
   }
 
+  // Last answer per service. A poll that can't read the process table returns
+  // this instead of dropping the entry — otherwise the panel blinks the port
+  // off and on, which reads as a service that never settles.
+  private lastPorts: Record<string, { ports: number[]; at: number }> = {};
+  private portsInFlight: Promise<Record<string, number[]>> | null = null;
+
   async allPorts(): Promise<Record<string, number[]>> {
+    // The panel polls on a fixed timer but a poll can outlast the interval on
+    // a slow machine; without this the scrapes stack up and get slower still.
+    if (this.portsInFlight) return this.portsInFlight;
+    this.portsInFlight = this.computePorts().finally(() => { this.portsInFlight = null; });
+    return this.portsInFlight;
+  }
+
+  private async computePorts(): Promise<Record<string, number[]>> {
+    const live = [...this.runtimes.entries()].filter(
+      ([, r]) => (r.runtime.status === 'running' || r.runtime.status === 'starting') && r.proc.pid
+    );
+    // Drop services that are gone, so their ports don't linger forever.
+    for (const id of Object.keys(this.lastPorts)) {
+      if (!live.some(([liveId]) => liveId === id)) delete this.lastPorts[id];
+    }
+    if (live.length === 0) return {};
+    const now = Date.now();
+
+    if (!IS_WIN) {
+      const out: Record<string, number[]> = {};
+      await Promise.all(live.map(async ([id, r]) => {
+        const ports = await listeningPortsForService(r.proc.pid!);
+        if (ports.length) { out[id] = ports; this.lastPorts[id] = { ports, at: now }; }
+      }));
+      return out;
+    }
+
+    // Two reads total, however many services are running.
+    const [map, listeners] = await Promise.all([processParentMap(), listListeningPortsFast()]);
     const out: Record<string, number[]> = {};
-    await Promise.all([...this.runtimes.entries()].map(async ([id, r]) => {
-      if (r.runtime.status !== 'running' && r.runtime.status !== 'starting') return;
-      if (!r.proc.pid) return;
-      const ports = await listeningPortsForService(r.proc.pid);
-      if (ports.length) out[id] = ports;
-    }));
+    for (const [id, r] of live) {
+      const prev = this.lastPorts[id];
+      // Couldn't read the table at all — this poll knows nothing, so say what
+      // the last one said rather than reporting the port as gone.
+      if (!map) {
+        if (prev && now - prev.at < STALE_PORT_MS) out[id] = prev.ports;
+        continue;
+      }
+      const pids = new Set(descendantsOf(r.proc.pid!, map));
+      const ports = [...new Set(listeners.filter((l) => pids.has(l.pid)).map((l) => l.port))].sort((a, b) => a - b);
+      if (ports.length) {
+        out[id] = ports;
+        this.lastPorts[id] = { ports, at: now };
+      } else if (prev && now - prev.at < STALE_PORT_MS) {
+        // `nest --watch` and friends drop the listener for a second or two on
+        // every rebuild. Hold the last reading briefly so the panel doesn't
+        // flicker, but let it expire so a port that really is gone clears.
+        out[id] = prev.ports;
+      }
+    }
     return out;
   }
 

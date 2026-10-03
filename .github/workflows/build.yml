@@ -39,8 +39,8 @@ jobs:
       - name: Build (Electron bundles)
         run: npm run build
 
-      - name: Build (headless server + web renderer)
-        run: npm run web:build
+      - name: Build (headless test server)
+        run: npm run build:headless
 
       # Exercises the real main-process code — filesystem, git, ripgrep, port
       # enumeration, a live PTY, Python detection — on this OS.

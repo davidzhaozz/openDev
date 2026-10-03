@@ -12,7 +12,9 @@ import { LIMITS } from './limits.js';
 // The directory watcher in workspace.ts only refreshes the file tree; it
 // can't tell an open editor buffer that its file was rewritten on disk
 // (by git, a formatter, another editor, etc.). We watch each open file
-// individually via fs.watchFile — stat polling, which (unlike fs.watch)
+// individually via fs.watchFile — stat polling every 2s (each stat is also
+// scanned by the endpoint agent on managed Windows machines, so 1s doubled
+// that cost for no visible gain), which (unlike fs.watch)
 // keeps firing across the temp-write+rename that most tools use to save
 // atomically. The count of open editor tabs is tiny, so the polling cost
 // is negligible (the EMFILE concerns that ruled out recursive watching
@@ -21,7 +23,7 @@ const fileWatchers = new Set<string>();
 
 function watchFileForEditor(path: string): void {
   if (fileWatchers.has(path)) return;
-  watchFile(path, { interval: 1000 }, (curr, prev) => {
+  watchFile(path, { interval: 2000 }, (curr, prev) => {
     // mtime or size moving = the bytes changed. curr.mtimeMs === 0 means
     // the file was deleted; report that too so the editor can react.
     if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) {

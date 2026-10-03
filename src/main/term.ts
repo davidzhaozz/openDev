@@ -5,7 +5,7 @@ import { safeSend } from './safeSend.js';
 import { onShutdown } from './lifecycle.js';
 import { randomUUID } from 'crypto';
 import { LIMITS } from './limits.js';
-import { terminalShell } from './platform.js';
+import { terminalShell, cliChildEnv, CLAUDE_CONFIG_PIN_MARKER } from './platform.js';
 
 // Coalesce PTY data into ~16ms frames before sending across IPC. Without
 // this, `cat huge.log` or `yes` floods the renderer with thousands of
@@ -36,11 +36,21 @@ function makeBatcher(id: string): Batcher {
     push: (s) => {
       pending += s;
       // Trim the front of pending if we've outrun the renderer. We keep
-      // the tail since that's what the user is actually looking at.
+      // the tail since that's what the user is actually looking at — but we
+      // resume on a line or escape boundary, because cutting through the
+      // middle of a control sequence makes the terminal print its tail as
+      // literal junk ("[0m", "?25h") instead of acting on it.
       if (pending.length > LIMITS.ptyBacklogBytes) {
-        const overflow = pending.length - LIMITS.ptyBacklogBytes;
-        pending = pending.slice(overflow);
-        dropped += overflow;
+        let cut = pending.length - LIMITS.ptyBacklogBytes;
+        const nl = pending.indexOf('\n', cut);
+        const esc = pending.indexOf('\x1b', cut);
+        let resume = -1;
+        if (nl >= 0 && esc >= 0) resume = Math.min(nl + 1, esc);
+        else if (nl >= 0) resume = nl + 1;
+        else if (esc >= 0) resume = esc;
+        if (resume > cut && resume - cut <= 8192) cut = resume;
+        pending = pending.slice(cut);
+        dropped += cut;
       }
       // Flush immediately when we've accumulated a screenful, otherwise
       // wait one frame to coalesce.
@@ -84,22 +94,49 @@ async function loadNodePty(): Promise<typeof import('node-pty') | null> {
   }
 }
 
+/**
+ * Environment for the shell. Two things matter here: the terminal has to
+ * advertise 256-colour support or prompts fall back to plain text, and the
+ * Electron-injected variables have to go — a shell that inherits
+ * ELECTRON_RUN_AS_NODE will turn any `node`/`npm` it launches into an Electron
+ * process instead, which prints nonsense into the pane.
+ */
+function ptyEnv(): Record<string, string> {
+  // A terminal tab should behave like the user's own terminal, so it gets the
+  // same scrubbing every CLI we spawn gets — notably CLAUDE_CONFIG_DIR, so
+  // running `claude` in a tab hits the same account it would outside the IDE.
+  const env = cliChildEnv();
+  // ...and for the same reason the pin marker comes back off. A tab IS the
+  // user's shell: if their profile deliberately points CLAUDE_CONFIG_DIR at a
+  // second account, a tab is exactly where that should still take effect. The
+  // marker is how a profile recognises the IDE's own AI children (see
+  // cliChildEnv), and a tab isn't one of those.
+  delete env[CLAUDE_CONFIG_PIN_MARKER];
+  env.TERM = 'xterm-256color';
+  env.COLORTERM = 'truecolor';
+  return env;
+}
+
 async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> {
   const pty = await loadNodePty();
   const { file: shell, args: shellArgs } = terminalShell();
+  // ConPTY rejects a zero-sized console, and a shell that thinks it has one
+  // column emits one character per line.
+  const safeCols = Math.max(2, Math.floor(cols) || 80);
+  const safeRows = Math.max(1, Math.floor(rows) || 24);
   if (pty) {
     const term = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
-      cols,
-      rows,
+      cols: safeCols,
+      rows: safeRows,
       cwd,
       // node-pty drives ConPTY on Windows, which needs a real console host —
       // useConpty:false would fall back to winpty and lose resize fidelity.
-      env: process.env as Record<string, string>
+      env: ptyEnv()
     });
     return {
       write: (s) => term.write(s),
-      resize: (c, r) => term.resize(c, r),
+      resize: (c, r) => term.resize(Math.max(2, Math.floor(c) || 2), Math.max(1, Math.floor(r) || 1)),
       kill: (sig) => term.kill(sig),
       onData: (cb) => term.onData(cb),
       onExit: (cb) => term.onExit(({ exitCode }) => cb(exitCode))
@@ -108,7 +145,7 @@ async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> 
   const { spawn } = await import('child_process');
   // Fallback when node-pty's native module can't load. No TTY, so no prompt
   // redraw or resize — but the shell still runs.
-  const child = spawn(shell, shellArgs.length ? shellArgs : ['-i'], { cwd, env: process.env, windowsHide: true });
+  const child = spawn(shell, shellArgs.length ? shellArgs : ['-i'], { cwd, env: ptyEnv(), windowsHide: true });
   return {
     write: (s) => child.stdin?.write(s),
     resize: () => { /* not supported in fallback */ },

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import type { AppSettings } from '../../../shared/types';
+import { useEffect, useRef, useState } from 'react';
+import type { AppSettings, ClaudeAuthStatus, PasswordStoreStatus, SavedLogin } from '../../../shared/types';
 import { THEMES, applyTheme, themeById, type Theme } from '../themes';
 import { ModelCapabilityNote } from './ModelCapabilityNote';
 import { isMacPlatform } from '../platformUi';
@@ -42,7 +42,7 @@ const EDITOR_FONT_PRESETS: Array<{ name: string; value: string }> = [
   { name: 'Courier New',       value: `'Courier New', Courier, monospace` }
 ];
 
-type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai';
+type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai' | 'jira' | 'passwords';
 
 // Modifier-click chords for editor LSP navigation. Stored as a string in
 // AppSettings so a future "Cmd+Option" kind of combo could be added
@@ -79,6 +79,12 @@ export function Settings({ onClose }: Props) {
   const [anthropicKey, setAnthropicKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [claudeCli, setClaudeCli] = useState('');
+  const [jiraSite, setJiraSite] = useState('');
+  const [jiraEmail, setJiraEmail] = useState('');
+  const [jiraToken, setJiraToken] = useState('');
+  const [jiraJql, setJiraJql] = useState('');
+  const [jiraDone, setJiraDone] = useState('');
+  const [jiraProbe, setJiraProbe] = useState<string | undefined>();
   const [codexCli, setCodexCli] = useState('');
   const [anthropicModel, setAnthropicModel] = useState('claude-sonnet-4-6');
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
@@ -110,6 +116,11 @@ export function Settings({ onClose }: Props) {
       if (s.anthropicApiKey) setAnthropicKey(s.anthropicApiKey);
       if (s.openaiApiKey) setOpenaiKey(s.openaiApiKey);
       if (s.claudeCliPath) setClaudeCli(s.claudeCliPath);
+      if (s.jiraSite) setJiraSite(s.jiraSite);
+      if (s.jiraEmail) setJiraEmail(s.jiraEmail);
+      if (s.jiraApiToken) setJiraToken(s.jiraApiToken);
+      if (s.jiraJql) setJiraJql(s.jiraJql);
+      if (s.jiraDoneStatus) setJiraDone(s.jiraDoneStatus);
       if (s.codexCliPath) setCodexCli(s.codexCliPath);
       if (s.anthropicModel) setAnthropicModel(s.anthropicModel);
       if (s.openaiModel) setOpenaiModel(s.openaiModel);
@@ -313,7 +324,9 @@ export function Settings({ onClose }: Props) {
             ['appearance', 'Appearance'],
             ['editor', 'Editor'],
             ['ai', 'AI'],
-            ['local-ai', 'Local AI']
+            ['local-ai', 'Local AI'],
+            ['jira', 'Jira'],
+            ['passwords', 'Passwords']
           ] as Array<[SettingsTab, string]>).map(([k, label]) => (
             <div key={k}
               className={`settings-tab ${tab === k ? 'active' : ''}`}
@@ -427,7 +440,10 @@ export function Settings({ onClose }: Props) {
           </div>
           </>}
 
+          {tab === 'passwords' && <SavedLoginsSection />}
+
           {tab === 'ai' && <>
+          <ClaudeAccountRow />
           <McpStatusRow />
 
           <div className="settings-row">
@@ -566,14 +582,79 @@ export function Settings({ onClose }: Props) {
           </div>
           </>}
 
+          {tab === 'jira' && <>
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Atlassian Jira</div>
+              <div className="settings-sub">
+                Site, account email, and an API token from id.atlassian.com → Security → API tokens.
+                The JIRA panel pulls real issues with these and posts a summary back when a run finishes.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                <input type="text" value={jiraSite} placeholder="your-team.atlassian.net" spellCheck={false}
+                  onChange={(e) => { setJiraSite(e.target.value); persist({ jiraSite: e.target.value }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <input type="text" value={jiraEmail} placeholder="you@company.com" spellCheck={false}
+                  onChange={(e) => { setJiraEmail(e.target.value); persist({ jiraEmail: e.target.value }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <input type="password" value={jiraToken} placeholder="API token" spellCheck={false}
+                  onChange={(e) => { setJiraToken(e.target.value); persist({ jiraApiToken: e.target.value }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button onClick={async () => {
+                    setJiraProbe('checking…');
+                    const r = await window.opendev.jira.testConnection();
+                    setJiraProbe(r.ok ? `connected as ${r.user}` : r.error);
+                  }}>Test connection</button>
+                  {jiraProbe && <span className="settings-sub" style={{ margin: 0 }}>{jiraProbe}</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Default issue query</div>
+              <div className="settings-sub">JQL used by the panel's search. Blank means your open assigned issues.</div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control">
+                <input type="text" value={jiraJql} spellCheck={false}
+                  placeholder="assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+                  onChange={(e) => { setJiraJql(e.target.value); persist({ jiraJql: e.target.value }); }}
+                  style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Status after a run</div>
+              <div className="settings-sub">
+                Where a ticket is moved once its AI run finishes and the summary is posted. Defaults to In Progress —
+                the work still needs review, so it deliberately does not go to Done.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control">
+                <input type="text" value={jiraDone} placeholder="In Progress" spellCheck={false}
+                  onChange={(e) => { setJiraDone(e.target.value); persist({ jiraDoneStatus: e.target.value }); }}
+                  style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+              </div>
+            </div>
+          </div>
+          </>}
+
           {tab === 'appearance' && <>
-          <Control
+          {windowTransparencySupported() && <Control
             label="Window transparency"
             sub="Background fades through to the desktop. Text stays solid."
             value={transparency} min={0} max={90}
             onChange={onTrans} unit="%"
             presets={[0, 25, 50, 75, 90]}
-          />
+          />}
 
           <div className="settings-row">
             <div className="settings-row-text">
@@ -616,6 +697,217 @@ export function Settings({ onClose }: Props) {
           </div>
           </>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Claude account for the IDE's own AI.
+ *
+ * The sign-in runs in the main process against the credential store the AI's
+ * CLI children are pinned to — NOT the account a terminal tab would use, which
+ * follows the user's shell profile and can be a different one entirely. That
+ * split is the whole reason this lives in Settings instead of being left to
+ * `claude auth login` in a tab.
+ *
+ * The CLI's flow is paste-a-code: it prints an authorize URL and blocks on
+ * stdin. So does the UI — show the URL, take the code, hand it back.
+ */
+function ClaudeAccountRow() {
+  const [status, setStatus] = useState<ClaudeAuthStatus | null>(null);
+  const [probing, setProbing] = useState(true);
+  // 'starting' = spawned, no URL yet. 'awaiting-code' = URL is up, waiting on
+  // the user. 'submitting' = code sent, waiting for the CLI to exit.
+  const [phase, setPhase] = useState<'idle' | 'starting' | 'awaiting-code' | 'submitting'>('idle');
+  const [url, setUrl] = useState('');
+  const [code, setCode] = useState('');
+  const [log, setLog] = useState('');
+  const [err, setErr] = useState<string | undefined>();
+  // Read inside the `done` listener, which is registered once — a ref, not
+  // state, so it doesn't need to be in the effect's dependency list.
+  const cancelled = useRef(false);
+
+  const refresh = async () => {
+    setProbing(true);
+    try {
+      setStatus(await window.opendev.aiAuth.status());
+    } catch (e: any) {
+      setStatus({ loggedIn: false, error: e?.message || String(e) });
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, []);
+
+  useEffect(() => window.opendev.aiAuth.onLoginEvent((ev) => {
+    if (ev.kind === 'output') {
+      // Keep the tail — the prompt and any error are at the end, and an
+      // unbounded string here would grow for as long as the CLI talks.
+      setLog((prev) => (prev + ev.chunk).slice(-4000));
+      // A rejected code does NOT end the flow: the CLI prints "Invalid code"
+      // and goes straight back to reading stdin, on the same still-valid
+      // authorize URL. So anything it says while we're waiting on the submit
+      // means it wants another one — hand the field back rather than sitting
+      // in 'submitting' forever waiting for an exit that never comes.
+      setPhase((p) => (p === 'submitting' ? 'awaiting-code' : p));
+      if (/invalid code/i.test(ev.chunk)) setErr('That code was rejected — copy the whole code from the browser and try again.');
+      return;
+    }
+    if (ev.kind === 'url') {
+      setUrl(ev.url);
+      setPhase('awaiting-code');
+      return;
+    }
+    setPhase('idle');
+    setUrl('');
+    setCode('');
+    setStatus(ev.status);
+    const wasCancelled = cancelled.current;
+    cancelled.current = false;
+    setErr(
+      ev.status.loggedIn || wasCancelled
+        ? undefined
+        : ev.status.error || `Sign-in did not complete (claude exited ${ev.code}). See the output below.`
+    );
+  }), []);
+
+  const onSignIn = async () => {
+    setErr(undefined);
+    setLog('');
+    setUrl('');
+    setCode('');
+    setPhase('starting');
+    const r = await window.opendev.aiAuth.loginStart();
+    if (!r.ok) {
+      setErr(r.error);
+      setPhase('idle');
+    }
+  };
+
+  const onSubmitCode = async () => {
+    if (!code.trim()) return;
+    setErr(undefined);
+    setPhase('submitting');
+    const ok = await window.opendev.aiAuth.loginSubmit(code);
+    if (!ok) {
+      setErr('The sign-in process is no longer running — start it again.');
+      setPhase('idle');
+      return;
+    }
+    // Empty the field either way: on success the flow is over, and on a
+    // rejection the user is pasting a fresh code, not editing this one.
+    setCode('');
+  };
+
+  const onCancel = async () => {
+    // The CLI exiting will still emit `done` with loggedIn:false — this keeps
+    // that from being reported as a sign-in failure the user didn't have.
+    cancelled.current = true;
+    await window.opendev.aiAuth.loginCancel();
+    setPhase('idle');
+    setUrl('');
+  };
+
+  const onSignOut = async () => {
+    const who = status?.email ? ` (${status.email})` : '';
+    if (!window.confirm(`Sign out of Claude${who}? The AI chat's Claude transports stop working until you sign in again.`)) return;
+    setProbing(true);
+    setErr(undefined);
+    try {
+      const s = await window.opendev.aiAuth.logout();
+      setStatus(s);
+      if (s.error) setErr(s.error);
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const busy = phase !== 'idle';
+  const who = [status?.email, status?.subscriptionType && `${status.subscriptionType} plan`]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div className="settings-row">
+      <div className="settings-row-text">
+        <div className="settings-label">Claude account</div>
+        <div className="settings-sub">
+          The account the IDE's AI chat and agents sign in as. openDev pins its Claude CLI children to this
+          credential store, so it is deliberately independent of whatever account a terminal tab picks up from
+          your shell profile — sign in here, not in a tab, or the chat can end up on a different account than
+          you expect.
+        </div>
+      </div>
+      <div className="settings-row-control">
+        <div className="settings-control" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: status?.loggedIn ? 'var(--ok)' : 'var(--danger)', fontSize: 12 }}>
+            {probing ? '… checking' : status?.loggedIn ? '● signed in' : '○ not signed in'}
+          </span>
+          {status?.loggedIn && who && <span className="settings-value">{who}</span>}
+          <button onClick={refresh} disabled={probing || busy}>Re-check</button>
+          {status?.loggedIn
+            ? <button onClick={onSignOut} disabled={probing || busy}>Sign out</button>
+            : <button
+                onClick={onSignIn}
+                disabled={probing || busy}
+                style={{ background: 'var(--accent-hi)', color: '#fff', borderColor: 'var(--accent-hi)' }}
+              >{phase === 'starting' ? 'Starting…' : 'Sign in'}</button>}
+          {status?.loggedIn && !busy && (
+            <button onClick={onSignIn} title="Sign in as a different Claude account">Switch account…</button>
+          )}
+        </div>
+
+        {/* Which store, and which binary answered — the two facts that make a
+            surprising account name explainable instead of mysterious. */}
+        {(status?.configDirectory || status?.binPath) && (
+          <div className="settings-control" style={{ marginTop: 4 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-3)' }}>
+              {status.configDirectory || ''}{status.binPath ? `  ·  ${status.binPath}` : ''}
+            </span>
+          </div>
+        )}
+
+        {phase === 'starting' && (
+          <div className="local-ai-status loading">Starting sign-in — waiting for the authorize link…</div>
+        )}
+
+        {(phase === 'awaiting-code' || phase === 'submitting') && (
+          <>
+            <div className="local-ai-status warn">
+              A browser window should have opened. Approve the sign-in there, then paste the code it gives you
+              below. If no browser opened, use the button to open the link yourself.
+            </div>
+            <div className="settings-control" style={{ marginTop: 6, gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => window.opendev.aiAuth.openUrl(url)} disabled={!url}>Open sign-in page</button>
+              <button onClick={() => navigator.clipboard.writeText(url)} disabled={!url}>Copy link</button>
+              <button onClick={onCancel}>Cancel</button>
+            </div>
+            <div className="settings-control" style={{ marginTop: 6, gap: 8 }}>
+              <input
+                type="text"
+                value={code}
+                autoFocus
+                placeholder="Paste the code from the browser"
+                spellCheck={false}
+                disabled={phase === 'submitting'}
+                onChange={(e) => setCode(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void onSubmitCode(); }}
+                style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+              />
+              <button
+                onClick={onSubmitCode}
+                disabled={!code.trim() || phase === 'submitting'}
+                style={{ background: 'var(--accent-hi)', color: '#fff', borderColor: 'var(--accent-hi)' }}
+              >{phase === 'submitting' ? 'Signing in…' : 'Submit'}</button>
+            </div>
+          </>
+        )}
+
+        {err && <div className="db-test-error">{err}</div>}
+        {status?.error && !err && <div className="db-test-error">{status.error}</div>}
+        {log && <pre className="mcp-snippet" style={{ marginTop: 6 }}>{log.trim()}</pre>}
       </div>
     </div>
   );
@@ -759,13 +1051,101 @@ function McpStatusRow() {
   );
 }
 
+/**
+ * Manage the credentials the embedded browser has saved. Electron ships no
+ * password manager, so this is the only place they can be reviewed or
+ * removed — there is no chrome://settings to fall back on.
+ */
+function SavedLoginsSection() {
+  const [logins, setLogins] = useState<SavedLogin[] | null>(null);
+  const [status, setStatus] = useState<PasswordStoreStatus | null>(null);
+
+  const reload = () => {
+    window.opendev.passwords.list().then(setLogins).catch(() => setLogins([]));
+    window.opendev.passwords.status().then(setStatus).catch(() => {});
+  };
+  useEffect(reload, []);
+
+  return (
+    <>
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <div className="settings-label">Saved logins</div>
+          <div className="settings-sub">
+            Passwords the embedded browser saved, sealed with this machine&apos;s OS credential
+            encryption. Passwords are never shown here, only the sites and usernames.
+          </div>
+        </div>
+        <div className="settings-row-control">
+          <button onClick={reload}>Refresh</button>
+        </div>
+      </div>
+
+      {status && !status.encryptionAvailable && (
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <div className="settings-sub pw-warn">
+              This system reports no OS credential encryption, so new passwords will not be saved.
+            </div>
+          </div>
+          <div className="settings-row-control" />
+        </div>
+      )}
+
+      <div className="settings-row" style={{ display: 'block' }}>
+        {logins === null && <div className="settings-sub">Loading…</div>}
+        {logins?.length === 0 && <div className="settings-sub">Nothing saved yet.</div>}
+        {logins?.map(l => (
+          <div className="pw-settings-row" key={l.id}>
+            <span className="pw-origin" title={l.origin}>{l.origin}</span>
+            <span className="pw-user" title={l.username}>{l.username || '(no username)'}</span>
+            <span className="pw-when">{new Date(l.updatedAt).toLocaleDateString()}</span>
+            <button
+              onClick={async () => {
+                await window.opendev.passwords.remove(l.id);
+                reload();
+              }}
+            >Delete</button>
+          </div>
+        ))}
+      </div>
+
+      {status && status.neverSave.length > 0 && (
+        <div className="settings-row" style={{ display: 'block' }}>
+          <div className="settings-label">Never asked for</div>
+          {status.neverSave.map(origin => (
+            <div className="pw-settings-row" key={origin}>
+              <span className="pw-origin">{origin}</span>
+              <span />
+              <span />
+              <button
+                onClick={async () => {
+                  await window.opendev.passwords.allowSave(origin);
+                  reload();
+                }}
+              >Ask again</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+// Only macOS windows are created transparent (see main/windowChrome.ts). On an
+// opaque window a --bg-alpha below 1 just blends the panels toward the black
+// backing, so the setting is hidden and ignored everywhere else.
+function windowTransparencySupported(): boolean {
+  return window.opendev.app.platform() === 'darwin';
+}
+
 export function applyAppearanceSettings(s: AppSettings) {
   const root = document.documentElement;
   // Theme first — its color tokens are overridable by explicit settings below.
   applyTheme(themeById(s.themeId));
   if (s.displayFontSize) root.style.setProperty('--ui-font-size', `${s.displayFontSize}px`);
   if (s.editorFontSize) root.style.setProperty('--editor-font-size', `${s.editorFontSize}px`);
-  if (s.windowOpacity != null) root.style.setProperty('--bg-alpha', String(s.windowOpacity));
+  if (s.windowOpacity != null && windowTransparencySupported()) root.style.setProperty('--bg-alpha', String(s.windowOpacity));
   if (s.fontColor) root.style.setProperty('--fg-0', s.fontColor);
   if (s.displayFontFamily) root.style.setProperty('--font-ui', s.displayFontFamily);
   if (s.editorFontFamily) root.style.setProperty('--font-mono', s.editorFontFamily);

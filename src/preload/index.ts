@@ -5,12 +5,16 @@ import type {
   AgentRun,
   AgentRunTarget,
   AgentStreamMsg,
+  AiActivityMsg,
   AddPackageArgs,
   AddPackageResult,
   AppSettings,
   InstallableTool,
+  PasswordStoreStatus,
   QueryHistoryEntry,
   QueryHistoryKind,
+  SavedLogin,
+  SavedLoginSecret,
   ToolInstallResult,
   ChatAttachment,
   Conversation,
@@ -25,9 +29,15 @@ import type {
   PythonRunConfig,
   RunSession,
   SystemStats,
+  NetEntry,
+  NetEntrySummary,
+  CaptureSource,
+  RecordingHandle,
+  RecordingResult,
   RestRequestSpec,
   RestResult,
   RestSavedRequest,
+  BrowserTokenInfo,
   CreateProjectArgs,
   CreateProjectResult,
   DetectedProject,
@@ -49,7 +59,12 @@ import type {
   ServiceDef,
   ServiceRuntime,
   TaskItem,
-  WorktreeInfo
+  JiraTask,
+  JiraIssueRef,
+  JiraBoard,
+  WorktreeInfo,
+  ClaudeAuthStatus,
+  ClaudeLoginEvent
 } from '../shared/types.js';
 
 type McpStatusInfo = {
@@ -91,6 +106,9 @@ const api = {
     // and an app menu, every other platform needs the renderer to draw its
     // own window controls and bind its own menu accelerators.
     platform: (): NodeJS.Platform => process.platform,
+    // e.g. '10.0.26200' on Windows. The terminal needs the build number to
+    // pick the right ConPTY compatibility mode.
+    osVersion: (): string => { try { return process.getSystemVersion(); } catch { return ''; } },
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.AppRelaunch)
   },
   workspace: {
@@ -101,7 +119,13 @@ const api = {
     onChanged: (cb: (p?: string) => void) => on(IPC.WorkspaceChanged, cb)
   },
   menu: {
-    onEvent: (cb: (action: string) => void) => on(IPC.MenuEvent, cb)
+    onEvent: (cb: (action: string) => void) => on(IPC.MenuEvent, cb),
+    // The frameless chrome has no native menu bar, so the renderer draws one
+    // and asks the main process to pop the real submenus at its coordinates.
+    topLevel: (): Promise<Array<{ index: number; label: string; enabled: boolean }>> =>
+      ipcRenderer.invoke(IPC.MenuTopLevel),
+    popup: (index: number, x: number, y: number): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.MenuPopup, index, x, y)
   },
   fs: {
     list: (dir?: string): Promise<FileNode[]> => ipcRenderer.invoke(IPC.FsList, dir),
@@ -122,10 +146,19 @@ const api = {
   search: {
     fuzzy: (q: string, limit?: number): Promise<Array<{ path: string; score: number; relative?: string }>> =>
       ipcRenderer.invoke(IPC.SearchFuzzy, q, limit),
-    grep: (q: string, opts?: { glob?: string; caseSensitive?: boolean }): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.SearchGrep, q, opts),
+    grep: (
+      q: string,
+      opts?: {
+        glob?: string;
+        caseSensitive?: boolean;
+        dir?: string;
+        regex?: boolean;
+        wholeWord?: boolean;
+        token?: string;
+      }
+    ): Promise<boolean> => ipcRenderer.invoke(IPC.SearchGrep, q, opts),
     onHit: (cb: (h: GrepHit) => void) => on(IPC.SearchGrepHit, cb),
-    onDone: (cb: () => void) => on(IPC.SearchGrepDone, cb)
+    onDone: (cb: (info?: { token?: string; count: number; truncated: boolean; error?: string }) => void) => on(IPC.SearchGrepDone, cb)
   },
   lsp: {
     request: <T = unknown>(method: string, params: unknown): Promise<T | null> =>
@@ -135,14 +168,17 @@ const api = {
     onDiagnostics: (cb: (p: any) => void) => on(IPC.LspDiagnostics, cb)
   },
   ai: {
-    send: (args: { conversationId?: string; text: string; attachments?: ChatAttachment[]; transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli'; context?: unknown }):
+    send: (args: { conversationId?: string; text: string; attachments?: ChatAttachment[]; transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli'; context?: unknown; model?: string; effort?: string }):
       Promise<{ conversationId: string; streamId: string }> => ipcRenderer.invoke(IPC.AiSend, args),
     cancel: (streamId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiCancel, streamId),
     onStream: (cb: (msg: { streamId: string; chunk?: string; done?: boolean; full?: string }) => void) =>
       on(IPC.AiStream, cb),
+    onActivity: (cb: (msg: AiActivityMsg) => void) => on(IPC.AiActivity, cb),
     conversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.AiConversations),
     conversation: (id: string): Promise<Conversation | null> => ipcRenderer.invoke(IPC.AiConversationGet, id),
-    deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id)
+    deleteConversation: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiConversationDelete, id),
+    renameConversation: (id: string, title: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.AiConversationRename, id, title)
   },
   llm: {
     mlxStart: (opts: { model: string; adapter?: string | null; port?: number }): Promise<MlxServerStatus> =>
@@ -205,6 +241,19 @@ const api = {
     > => ipcRenderer.invoke(IPC.AiLocalListModels, baseUrl),
     pickBinary: (): Promise<string | null> => ipcRenderer.invoke(IPC.AiLocalPickBinary)
   },
+  // Claude account for the IDE's own AI (Settings → AI). Runs against the
+  // credential store cliChildEnv pins, which is the one the chat uses —
+  // deliberately not whatever a terminal tab's shell profile selects.
+  aiAuth: {
+    status: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke(IPC.AiAuthStatus),
+    loginStart: (opts?: { console?: boolean; email?: string }): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke(IPC.AiAuthLoginStart, opts),
+    loginSubmit: (code: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiAuthLoginSubmit, code),
+    loginCancel: (): Promise<boolean> => ipcRenderer.invoke(IPC.AiAuthLoginCancel),
+    logout: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke(IPC.AiAuthLogout),
+    openUrl: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.AiAuthOpenUrl, url),
+    onLoginEvent: (cb: (ev: ClaudeLoginEvent) => void) => on(IPC.AiAuthLoginEvent, cb)
+  },
   mcp: {
     status: (): Promise<McpStatusInfo> => ipcRenderer.invoke(IPC.McpStatus),
     restart: (): Promise<McpStatusInfo> => ipcRenderer.invoke(IPC.McpRestart),
@@ -241,6 +290,28 @@ const api = {
     save: (t: Partial<TaskItem>): Promise<TaskItem> => ipcRenderer.invoke(IPC.TasksSave, t),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.TasksDelete, id)
   },
+  jira: {
+    list: (): Promise<JiraTask[]> => ipcRenderer.invoke(IPC.JiraList),
+    configured: (): Promise<string | null> => ipcRenderer.invoke(IPC.JiraConfigured),
+    boards: (): Promise<{ boards: JiraBoard[]; active: string }> => ipcRenderer.invoke(IPC.JiraBoards),
+    selectBoard: (file: string): Promise<JiraTask[]> => ipcRenderer.invoke(IPC.JiraSelectBoard, file),
+    createBoard: (name: string): Promise<{ file: string; tasks: JiraTask[] }> =>
+      ipcRenderer.invoke(IPC.JiraCreateBoard, name),
+    renameBoard: (file: string, name: string): Promise<{ file: string; tasks: JiraTask[] }> =>
+      ipcRenderer.invoke(IPC.JiraRenameBoard, file, name),
+    add: (keys: string | string[]): Promise<{ added: JiraTask[]; errors: string[] }> =>
+      ipcRenderer.invoke(IPC.JiraAdd, keys),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.JiraRemove, id),
+    refresh: (): Promise<{ tasks: JiraTask[]; errors: string[] }> => ipcRenderer.invoke(IPC.JiraRefresh),
+    search: (jql?: string): Promise<JiraIssueRef[]> => ipcRenderer.invoke(IPC.JiraSearch, jql),
+    start: (id: string): Promise<JiraTask | null> => ipcRenderer.invoke(IPC.JiraStart, id),
+    stop: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.JiraStop, id),
+    log: (id: string): Promise<string> => ipcRenderer.invoke(IPC.JiraLog, id),
+    testConnection: (): Promise<{ ok: true; user: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke(IPC.JiraTestConnection),
+    onChanged: (cb: () => void) => on(IPC.JiraChanged, cb),
+    onLog: (cb: (m: { id: string; chunk: string }) => void) => on(IPC.JiraLogChunk, cb)
+  },
   db: {
     list: (): Promise<DbConnectionProfile[]> => ipcRenderer.invoke(IPC.DbConnectionsList),
     save: (p: DbConnectionProfile & { password?: string }): Promise<DbConnectionProfile> =>
@@ -259,6 +330,16 @@ const api = {
     schema: (id: string): Promise<DbSchema[]> => ipcRenderer.invoke(IPC.DbSchema, id),
     query: (id: string, sql: string): Promise<DbResult> => ipcRenderer.invoke(IPC.DbQuery, id, sql),
     updateRows: (args: { connId: string; schema?: string; table: string; updates: DbRowUpdate[] }): Promise<DbUpdateResult> => ipcRenderer.invoke(IPC.DbUpdateRows, args)
+  },
+  passwords: {
+    status: (): Promise<PasswordStoreStatus> => ipcRenderer.invoke(IPC.PasswordsStatus),
+    list: (): Promise<SavedLogin[]> => ipcRenderer.invoke(IPC.PasswordsList),
+    forOrigin: (url: string): Promise<SavedLoginSecret[]> => ipcRenderer.invoke(IPC.PasswordsForOrigin, url),
+    save: (input: { url: string; username: string; password: string }): Promise<{ ok: boolean; origin?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.PasswordsSave, input),
+    remove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.PasswordsDelete, id),
+    neverSave: (url: string): Promise<{ ok: boolean; origin?: string }> => ipcRenderer.invoke(IPC.PasswordsNeverSave, url),
+    allowSave: (url: string): Promise<{ ok: boolean; origin?: string }> => ipcRenderer.invoke(IPC.PasswordsAllowSave, url)
   },
   git: {
     status: (): Promise<GitFileStatus[]> => ipcRenderer.invoke(IPC.GitStatus),
@@ -280,6 +361,8 @@ const api = {
       ipcRenderer.invoke(IPC.GitFileLog, filePath, limit),
     show: (dir: string, hash: string): Promise<{ diff: string } | { error: string }> =>
       ipcRenderer.invoke(IPC.GitShow, dir, hash),
+    fileAt: (filePath: string, hash: string): Promise<{ content: string } | { error: string }> =>
+      ipcRenderer.invoke(IPC.GitFileAt, filePath, hash),
     log: (limit?: number): Promise<any> => ipcRenderer.invoke(IPC.GitLog, limit),
     worktreeCreate: (opts: { name?: string; branch?: string }): Promise<WorktreeInfo> =>
       ipcRenderer.invoke(IPC.GitWorktreeCreate, opts),
@@ -353,15 +436,24 @@ const api = {
     send: (spec: RestRequestSpec): Promise<RestResult> => ipcRenderer.invoke(IPC.RestSend, spec),
     listSaved: (): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestListSaved),
     save: (req: RestSavedRequest): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestSave, req),
-    delete: (id: string): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestDelete, id)
+    delete: (id: string): Promise<RestSavedRequest[]> => ipcRenderer.invoke(IPC.RestDelete, id),
+    browserTokens: (opts?: { url?: string; origin?: string; scan?: boolean }): Promise<{ tokens: BrowserTokenInfo[]; match: BrowserTokenInfo | null; cookies: number }> =>
+      ipcRenderer.invoke(IPC.RestBrowserTokens, opts),
+    revealBrowserToken: (opts: { url: string; origin?: string }): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.RestBrowserTokenReveal, opts),
+    onChanged: (cb: () => void) => on(IPC.RestChanged, cb)
   },
   window: {
-    popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path),
-    popoutAi: (opts?: { conversationId?: string; name?: string; initialPrompt?: string }): Promise<boolean> =>
+    // atCursor: place the window where a dragged tab was dropped (tear-off).
+    popoutFile: (path: string, placement?: { atCursor?: boolean }): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.WindowPopoutFile, path, placement),
+    popoutAi: (opts?: { conversationId?: string; name?: string; initialPrompt?: string; atCursor?: boolean }): Promise<boolean> =>
       ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {}),
     minimize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMinimize),
     toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMaximizeToggle),
     close: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowClose),
+    setOverlayColors: (color: string, symbolColor: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.WindowSetOverlayColors, color, symbolColor),
     onMaximizedChanged: (cb: (maximized: boolean) => void) => on(IPC.WindowMaximizedChanged, cb)
   },
   tools: {
@@ -378,13 +470,38 @@ const api = {
   session: {
     save: (state: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SessionSave, state),
     load: (): Promise<{
-      tabs: Array<{ kind: string; path?: string; name?: string; cwd?: string; url?: string; conversationId?: string }>;
+      tabs: Array<{ kind: string; path?: string; name?: string; cwd?: string; url?: string; conversationId?: string; text?: string; connId?: string }>;
       activeIndex?: number;
       rightTab?: 'ai' | 'db' | 'es' | 'rest' | 'ml';
       sqlConnId?: string;
       sqlText?: string;
       esText?: string;
     } | null> => ipcRenderer.invoke(IPC.SessionLoad)
+  },
+  // Unified network log. The list carries summaries; a row's headers and
+  // bodies are pulled only when it is opened.
+  network: {
+    list: (): Promise<NetEntrySummary[]> => ipcRenderer.invoke(IPC.NetworkList),
+    get: (id: string): Promise<NetEntry | null> => ipcRenderer.invoke(IPC.NetworkGet, id),
+    clear: (): Promise<boolean> => ipcRenderer.invoke(IPC.NetworkClear),
+    setCapture: (on: boolean): Promise<boolean> => ipcRenderer.invoke(IPC.NetworkSetCapture, on),
+    captureState: (): Promise<boolean> => ipcRenderer.invoke(IPC.NetworkCaptureState),
+    onEntry: (cb: (e: NetEntrySummary) => void) => on(IPC.NetworkEntry, cb),
+    onCleared: (cb: () => void) => on(IPC.NetworkCleared, cb),
+    onCaptureState: (cb: (on: boolean) => void) => on(IPC.NetworkCaptureState, cb)
+  },
+  // Screen recorder. desktopCapturer is main-only, so the source list
+  // comes over IPC and the renderer hands the returned id to getUserMedia.
+  // Chunks stream back out as MediaRecorder produces them.
+  recorder: {
+    sources: (): Promise<CaptureSource[]> => ipcRenderer.invoke(IPC.RecorderSources),
+    start: (opts: { ext?: string; withMic?: boolean }): Promise<RecordingHandle> =>
+      ipcRenderer.invoke(IPC.RecorderStart, opts),
+    chunk: (id: string, bytes: Uint8Array): Promise<number> =>
+      ipcRenderer.invoke(IPC.RecorderChunk, id, bytes),
+    finish: (id: string, durationMs: number): Promise<RecordingResult | null> =>
+      ipcRenderer.invoke(IPC.RecorderFinish, id, durationMs),
+    cancel: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.RecorderCancel, id)
   },
   system: {
     onMemoryWarning: (cb: (m: { level: 'ok' | 'warn' | 'critical'; rss: number; heapUsed: number; heapTotal: number; message: string }) => void) => on(IPC.MemoryWarning, cb),

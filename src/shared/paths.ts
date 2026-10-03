@@ -86,3 +86,8 @@ export function fileUriToPath(uri: string): string {
   // `/C:/a/b` is a Windows path wearing a URI's leading slash.
   return /^\/[a-zA-Z]:/.test(rest) ? rest.slice(1) : rest;
 }
+
+/** True for the file extensions the mermaid diagram view handles. */
+export function isMermaidPath(p: string): boolean {
+  return /\.(mmd|mermaid)$/i.test(p);
+}

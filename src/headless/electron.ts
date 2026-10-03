@@ -1,4 +1,5 @@
-// Drop-in replacement for the `electron` module, used only by the web build.
+// Drop-in replacement for the `electron` module, used only by the headless
+// test server (src/headless/) that CI's smoke test drives.
 //
 // Every file in src/main/ imports from 'electron', but between them they touch
 // a very small slice of it: ipcMain, a handful of app.getPath()/getVersion()
@@ -59,7 +60,7 @@ export function registeredChannels(): string[] {
 
 // safeSend() walks BrowserWindow.getAllWindows() and calls webContents.send on
 // each. We hand it one pseudo-window whose `send` fans out to every connected
-// browser tab — which is exactly the semantics safeSend already documents
+// test client — which is exactly the semantics safeSend already documents
 // (broadcast to main + popouts; listeners filter by streamId themselves).
 type Broadcaster = (channel: string, args: unknown[]) => void;
 let broadcast: Broadcaster = () => {};
@@ -76,9 +77,9 @@ export class BrowserWindow {
   }
   static getFocusedWindow() { return null; }
   constructor() {
-    // Only reachable via the tab tear-off handlers, which the web client
-    // overrides with window.open() before they can be called.
-    throw new Error('BrowserWindow is not available in the OpenDev web server');
+    // Only reachable via the tab tear-off handlers, which the smoke test
+    // never calls.
+    throw new Error('BrowserWindow is not available in the headless server');
   }
 }
 
@@ -137,29 +138,27 @@ export const app = {
       case 'home': return homedir();
       case 'temp': return tmpdir();
       case 'downloads': return join(homedir(), 'Downloads');
+      case 'videos': return join(homedir(), 'Videos');
       case 'documents': return join(homedir(), 'Documents');
       case 'desktop': return join(homedir(), 'Desktop');
       case 'exe': return process.execPath;
       default: return join(appDataRoot(), appName, name);
     }
   },
-  // Lifecycle is owned by src/server/index.ts; these keep main-process code
+  // Lifecycle is owned by src/headless/index.ts; these keep main-process code
   // that reaches for them from crashing.
   whenReady: () => Promise.resolve(),
   on: () => app,
   once: () => app,
   quit: () => { process.emit('SIGTERM' as NodeJS.Signals); },
   exit: (code = 0) => process.exit(code),
-  relaunch: () => { /* the browser reloads instead — see the web bridge */ },
+  relaunch: () => { /* nothing to relaunch headless */ },
   commandLine: { appendSwitch: () => {}, appendArgument: () => {} }
 };
 
 /* ----------------------------------------------------------- dialog / shell */
 
-// Native pickers can't exist server-side. The web client intercepts every
-// picker call (workspace.pick, projects.pickDir, agents.importPick,
-// aiLocal.pickBinary) and drives its own remote file browser instead, so these
-// only run if something new starts calling dialog directly.
+// Native pickers can't exist headless; every dialog reports "cancelled".
 export const dialog = {
   showOpenDialog: async () => ({ canceled: true, filePaths: [] as string[] }),
   showSaveDialog: async () => ({ canceled: true, filePath: undefined as string | undefined }),
@@ -168,10 +167,9 @@ export const dialog = {
 };
 
 export const shell = {
-  // Hand the URL to the browser that asked for it rather than opening a
-  // window on the server's desktop.
-  openExternal: async (url: string) => { broadcast('web:open-external', [url]); },
-  showItemInFolder: (p: string) => { broadcast('web:reveal-unsupported', [p]); },
+  // Never open windows on a CI runner's desktop.
+  openExternal: async (_url: string) => {},
+  showItemInFolder: (_p: string) => {},
   openPath: async () => ''
 };
 
@@ -184,4 +182,53 @@ export const Menu = {
 export const nativeTheme = { shouldUseDarkColors: true, on: () => {} };
 export const clipboard = { readText: () => '', writeText: () => {} };
 
-export default { app, ipcMain, dialog, shell, Menu, BrowserWindow, nativeTheme, clipboard };
+/* ------------------------------------------------------- screen recording */
+
+// There is no desktop to capture headless. An empty source list is what the
+// recorder UI already treats as "nothing to record here", so it degrades to
+// a disabled button instead of an error.
+export const desktopCapturer = {
+  getSources: async () => [] as Array<{
+    id: string; name: string; display_id: string; thumbnail: { toDataURL(): string; isEmpty(): boolean };
+  }>
+};
+
+export const screen = {
+  getAllDisplays: () => [] as Array<{ id: number; size: { width: number; height: number }; scaleFactor: number }>,
+  getPrimaryDisplay: () => ({ id: 0, size: { width: 0, height: 0 }, scaleFactor: 1 })
+};
+
+// The embedded browser's password store (main/passwords.ts) seals with
+// safeStorage. Plain Node has no OS keychain of its own, so report encryption
+// as unavailable — the store then refuses to save rather than write anything
+// weaker.
+export const safeStorage = {
+  isEncryptionAvailable: () => false,
+  encryptString: (_plain: string): Buffer => { throw new Error('safeStorage is not available in the headless server'); },
+  decryptString: (_sealed: Buffer): string => { throw new Error('safeStorage is not available in the headless server'); }
+};
+
+export const systemPreferences = {
+  getMediaAccessStatus: (_kind: string) => 'granted' as const,
+  askForMediaAccess: async (_kind: string) => true
+};
+
+// The network log's browser feed attaches a CDP debugger to <webview> tags.
+// A browser tab has no webviews to attach to, so the list is always empty and
+// only the IDE's own fetch traffic is captured — which is the half the web
+// client can actually see anyway.
+export const webContents = {
+  getAllWebContents: () => [] as Array<{ id: number; getType(): string }>
+};
+
+// No browser panel in the web build, so no cookie jar to borrow from.
+export const session = {
+  defaultSession: {
+    cookies: { get: async (_filter: { url?: string }) => [] as Array<{ name: string; value: string }> }
+  }
+};
+
+export default {
+  app, ipcMain, dialog, shell, Menu, BrowserWindow, nativeTheme, clipboard,
+  desktopCapturer, screen, systemPreferences, webContents, safeStorage
+};

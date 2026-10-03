@@ -3,7 +3,7 @@ import { CodeEditor } from './components/Editor';
 import { Settings, applyAppearanceSettings } from './components/Settings';
 import './styles/global.css';
 import { baseName, dirName } from '@shared/paths';
-import { WindowControls, usesFramelessChrome } from './components/WindowControls';
+import { WindowControls, drawsWindowControls } from './components/WindowControls';
 import { modKey } from './platformUi';
 
 export function Popout({ path }: { path: string }) {
@@ -33,7 +33,7 @@ export function Popout({ path }: { path: string }) {
         <div className="actions">
           <button onClick={save} disabled={!modified}>Save ({modKey()}S)</button>
         </div>
-        {usesFramelessChrome() && <WindowControls />}
+        {drawsWindowControls() && <WindowControls />}
       </div>
       <div style={{ background: 'var(--bg-0)', height: '100%', minHeight: 0 }}>
         <CodeEditor

@@ -11,6 +11,7 @@ import { initFileLogger, getLogPath } from './log.js';
 import { LIMITS } from './limits.js';
 import { safeSend } from './safeSend.js';
 import { IPC } from '@shared/ipc';
+import { windowChromeOptions, wireMaximizeEvents, savedBounds, rememberBounds, showWhenReady } from './windowChrome.js';
 
 // Raise the V8 old-space cap for the renderer/utility processes (where
 // large editor buffers, DB result sets, and AI streams actually live).
@@ -60,30 +61,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 
-// macOS keeps its traffic lights and insets them over our own titlebar.
-// Windows and Linux go frameless and get the controls the renderer draws —
-// `titleBarOverlay` would give native buttons but cannot be combined with a
-// transparent window, and transparency is the whole point of the --bg-alpha
-// slider in Settings.
-function windowChromeOptions(): Electron.BrowserWindowConstructorOptions {
-  if (process.platform === 'darwin') {
-    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 } };
-  }
-  return { frame: false };
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    ...savedBounds('main', 1440, 900),
     minWidth: 900,
     minHeight: 600,
     show: false,
-    // Transparent backing so the user-controllable `--bg-alpha` CSS variable
-    // can make the panels see-through. Defaults to full opacity until the
-    // user moves the slider in Settings.
-    transparent: true,
-    backgroundColor: '#00000000',
+    // Transparent on macOS only (the --bg-alpha slider); see windowChrome.ts
+    // for why Windows windows are opaque.
     ...windowChromeOptions(),
     webPreferences: {
       preload: join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
@@ -94,18 +79,23 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show());
+  showWhenReady(mainWindow);
 
   // The frameless chrome draws its own maximize/restore glyph, so it needs to
   // know when the state changes by any other route (double-click, Win+Up).
-  const sendMaximized = () => mainWindow?.webContents.send(IPC.WindowMaximizedChanged, mainWindow.isMaximized());
-  mainWindow.on('maximize', sendMaximized);
-  mainWindow.on('unmaximize', sendMaximized);
+  wireMaximizeEvents(mainWindow);
+  rememberBounds(mainWindow, 'main');
 
   // Drop the reference when the window is gone — otherwise `mainWindow`
   // keeps pointing at a destroyed BrowserWindow, and any later access to
   // `.webContents` (e.g. a menu action) throws "Object has been destroyed".
-  mainWindow.on('closed', () => { mainWindow = null; });
+  // Pop-outs (torn-off AI chats and files) belong to the IDE window. Left
+  // open, they kept the app — its services, LSP servers and MCP port — running
+  // after the user closed the IDE, with no main window to get back to.
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.close();
+  });
 
   if (process.env.NODE_ENV === 'development' || process.env.OPENDEV_DEVTOOLS === '1') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -197,7 +187,27 @@ function buildAppMenu() {
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
     },
-    { role: 'editMenu' },
+    {
+      // Electron's `editMenu` role covers Undo/Cut/Copy/Paste and nothing
+      // else, so the navigation commands had no home in the menu bar at all —
+      // they existed only as keyboard shortcuts, which is undiscoverable and
+      // useless on the frameless Windows chrome where the menu is the way in.
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac
+          ? [{ role: 'pasteAndMatchStyle' as const }, { role: 'delete' as const }, { role: 'selectAll' as const }]
+          : [{ role: 'delete' as const }, { type: 'separator' as const }, { role: 'selectAll' as const }]),
+        { type: 'separator' },
+        { label: 'Find File…', accelerator: 'CmdOrCtrl+P', click: () => sendMenu('find-file') },
+        { label: 'Find in Files…', accelerator: 'Shift+CmdOrCtrl+F', click: () => sendMenu('find-in-files') }
+      ]
+    },
     {
       // Custom View menu — same as Electron's `viewMenu` role MINUS the
       // devtools entries. The user prefers no in-app devtools surface; for

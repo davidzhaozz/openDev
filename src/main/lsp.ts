@@ -187,7 +187,23 @@ async function initParams(root: string, kind: ServerKind) {
   return base;
 }
 
-async function ensureServer(kind: ServerKind): Promise<Server | null> {
+// In-flight starts, keyed by kind. ensureServer awaits initParams before the
+// server lands in `servers`, so without this several files opening at once
+// (session restore) each spawned their own server, and all but the last were
+// untracked — never reaped, never killed, 150-300 MB apiece.
+const starting = new Map<ServerKind, { root: string; promise: Promise<Server | null> }>();
+
+function ensureServer(kind: ServerKind): Promise<Server | null> {
+  const root = workspace.getRoot();
+  const inflight = starting.get(kind);
+  if (inflight && inflight.root === root) return inflight.promise;
+  if (!root || (servers.get(kind)?.root === root)) return startServer(kind);
+  const promise = startServer(kind).finally(() => { if (starting.get(kind)?.promise === promise) starting.delete(kind); });
+  starting.set(kind, { root, promise });
+  return promise;
+}
+
+async function startServer(kind: ServerKind): Promise<Server | null> {
   const root = workspace.getRoot();
   if (!root) return null;
   const existing = servers.get(kind);
@@ -295,6 +311,9 @@ export function registerLspIpc() {
 
   ipcMain.handle(IPC.LspNotify, async (_e, method: string, params: unknown) => {
     const kind = serverKindForRequestParams(params);
+    // Closing a document needs no server; do not respawn one the idle reaper
+    // just killed only to tell it about a file it never saw.
+    if (method === 'textDocument/didClose' && !servers.has(kind) && !starting.has(kind)) return true;
     const s = await ensureServer(kind);
     if (!s) return false;
     touch(s);

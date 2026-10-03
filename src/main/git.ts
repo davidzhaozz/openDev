@@ -1,7 +1,7 @@
 import { ipcMain, app } from 'electron';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { join, relative, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
@@ -174,6 +174,22 @@ export function registerGitIpc() {
       const g = simpleGit(dir);
       const diff = await g.show([hash, '--stat', '--patch']);
       return { diff };
+    } catch (e: any) {
+      return { error: e?.message || String(e) };
+    }
+  });
+
+  // Contents of one file as of one commit. `git show <hash>:<path>` needs the
+  // path relative to the repo root (and with forward slashes even on Windows),
+  // so resolve the toplevel from the file's own directory first.
+  ipcMain.handle(IPC.GitFileAt, async (_e, filePath: string, hash: string) => {
+    try {
+      const dir = dirName(filePath);
+      const g = simpleGit(dir);
+      const top = (await g.revparse(['--show-toplevel'])).trim();
+      const rel = relative(top, filePath).split(sep).join('/');
+      const content = await g.show([`${hash}:${rel}`]);
+      return { content };
     } catch (e: any) {
       return { error: e?.message || String(e) };
     }

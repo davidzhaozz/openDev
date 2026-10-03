@@ -14,6 +14,11 @@ function capTail<T>(arr: T[], max: number): T[] {
 // When the SQL result grid is the live view of a known table (clicked from
 // the DB tree), this carries enough info for the editable grid to build
 // safe UPDATE statements. Cleared the moment the user hand-edits the SQL.
+/** One SQL console’s result set, or the error that replaced it. */
+export type SqlResult =
+  | { columns: string[]; rows: unknown[][]; rowCount: number; durationMs: number; truncated?: boolean }
+  | { error: string };
+
 export type SqlSource = {
   driver: 'mysql' | 'postgres';
   schema?: string;
@@ -27,7 +32,7 @@ export type CenterTab =
   | { kind: 'file'; id: string; path: string; name: string; content: string; modified: boolean; dirtyContent?: string; externallyChanged?: boolean; diskContent?: string }
   | { kind: 'terminal'; id: string; name: string; termId?: string; cwd: string }
   | { kind: 'browser'; id: string; name: string; url: string }
-  | { kind: 'sql'; id: string; name: string }
+  | { kind: 'sql'; id: string; name: string; connId?: string; text: string; source?: SqlSource; result?: SqlResult; runNonce: number }
   | { kind: 'es'; id: string; name: string }
   | { kind: 'diff'; id: string; name: string; filePath: string; hash?: string; diff: string }
   | { kind: 'ai-task'; id: string; name: string }
@@ -35,10 +40,11 @@ export type CenterTab =
   | { kind: 'design-proposals'; id: string; name: string; proposals: DesignProposal[]; targetPath?: string }
   | { kind: 'agent-run'; id: string; name: string; runId: string; agentSlug: string; target: string }
   | { kind: 'rest'; id: string; name: string; savedId?: string }
-  | { kind: 'pip'; id: string; name: string };
+  | { kind: 'pip'; id: string; name: string }
+  | { kind: 'net'; id: string; name: string; entryId: string };
 
 export type BottomTabKey = 'log' | 'debug' | 'run';
-export type RightTabKey = 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm';
+export type RightTabKey = 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm' | 'jira' | 'net';
 
 export function emptyRestSpec(): RestRequestSpec {
   return {
@@ -70,10 +76,22 @@ type Store = {
   openFileTab: (path: string, content: string) => void;
   openTerminalTab: (opts?: { cwd?: string; name?: string }) => void;
   openBrowserTab: (url: string, name?: string) => void;
-  openSqlTab: () => void;
+  /**
+   * Opens a SQL console. Every call makes a new tab — clicking a second
+   * table must not overwrite the query you are still reading — except
+   * with focusExisting, which the DB right-tab uses so merely switching
+   * panels does not pile up empty consoles.
+   */
+  openSqlTab: (opts?: {
+    connId?: string; text?: string; source?: SqlSource; name?: string;
+    run?: boolean; focusExisting?: boolean;
+  }) => string;
+  patchSqlTab: (id: string, patch: Partial<{ connId?: string; text: string; source?: SqlSource; result?: SqlResult; name: string }>) => void;
+  runSqlTab: (id: string) => void;
   openEsTab: () => void;
   openRestTab: (opts?: { spec?: RestRequestSpec; name?: string; savedId?: string }) => string;
   openPipTab: () => string;
+  openNetTab: (entryId: string, name: string) => string;
   openDiffTab: (opts: { filePath: string; hash?: string; diff: string }) => void;
   openAiTaskTab: (opts?: { goal?: string; priorities?: string[] }) => void;
   openAiChatTab: (opts?: { conversationId?: string; name?: string; focusIfOpen?: boolean; initialPrompt?: string }) => string;
@@ -329,14 +347,41 @@ export const useStore = create<Store>((set, get) => ({
     const tab: CenterTab = { kind: 'browser', id, name: tabName, url };
     return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
   }),
-  openSqlTab: () => set((s) => {
-    // Singleton — at most one SQL workspace tab at a time.
-    const existing = s.centerTabs.find(t => t.kind === 'sql');
-    if (existing) return { activeCenterId: existing.id };
+  openSqlTab: (opts) => {
+    const state = get();
+    // focusExisting is for "I switched to the DB panel", not "I asked for
+    // this query" — the latter always deserves its own console.
+    if (opts?.focusExisting) {
+      const existing = [...state.centerTabs].reverse().find(t => t.kind === 'sql');
+      if (existing) {
+        set({ activeCenterId: existing.id });
+        return existing.id;
+      }
+    }
     const id = nextTabId();
-    const tab: CenterTab = { kind: 'sql', id, name: 'SQL' };
-    return { centerTabs: [...s.centerTabs, tab], activeCenterId: id };
-  }),
+    // Fall back to the last used connection so a console opened from the
+    // editor isn't stranded without one.
+    const connId = opts?.connId
+      ?? [...state.centerTabs].reverse().find((t): t is Extract<CenterTab, { kind: 'sql' }> => t.kind === 'sql')?.connId;
+    const tab: CenterTab = {
+      kind: 'sql',
+      id,
+      name: opts?.name || opts?.source?.table || 'SQL',
+      connId,
+      text: opts?.text ?? 'SELECT 1;',
+      source: opts?.source,
+      // Opening with run:true arms the console; SqlWorkspace fires on mount.
+      runNonce: opts?.run ? 1 : 0
+    };
+    set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
+    return id;
+  },
+  patchSqlTab: (id, patch) => set((s) => ({
+    centerTabs: s.centerTabs.map(t => (t.id === id && t.kind === 'sql' ? { ...t, ...patch } : t))
+  })),
+  runSqlTab: (id) => set((s) => ({
+    centerTabs: s.centerTabs.map(t => (t.id === id && t.kind === 'sql' ? { ...t, runNonce: t.runNonce + 1 } : t))
+  })),
   openEsTab: () => set((s) => {
     const existing = s.centerTabs.find(t => t.kind === 'es');
     if (existing) return { activeCenterId: existing.id };
@@ -353,6 +398,23 @@ export const useStore = create<Store>((set, get) => ({
     }
     const id = nextTabId();
     const tab: CenterTab = { kind: 'pip', id, name: 'Packages' };
+    set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
+    return id;
+  },
+  openNetTab: (entryId, name) => {
+    // Singleton, like the SQL/REST workspaces: clicking a second row retargets
+    // the open tab rather than stacking one tab per inspected call.
+    const state = get();
+    const existing = state.centerTabs.find((t) => t.kind === 'net');
+    if (existing) {
+      set((s) => ({
+        centerTabs: s.centerTabs.map((t) => (t.id === existing.id ? { ...t, entryId, name } : t)),
+        activeCenterId: existing.id
+      }));
+      return existing.id;
+    }
+    const id = nextTabId();
+    const tab: CenterTab = { kind: 'net', id, name, entryId };
     set((s) => ({ centerTabs: [...s.centerTabs, tab], activeCenterId: id }));
     return id;
   },

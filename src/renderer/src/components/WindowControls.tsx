@@ -56,7 +56,26 @@ export function WindowControls() {
   );
 }
 
-/** True when this platform needs the buttons above — i.e. anything but macOS. */
+/**
+ * True when there is no native menu bar, so the renderer draws one (MenuBar)
+ * and binds its shortcuts — anything but macOS.
+ */
 export function usesFramelessChrome(): boolean {
   return window.opendev.app.platform() !== 'darwin';
+}
+
+/**
+ * True when the renderer must also draw minimize/maximize/close. Windows gets
+ * native caption buttons — overlaid on the main window, in the real frame of
+ * pop-outs (see main/windowChrome.ts) — so only Linux, which stays fully
+ * frameless, needs these.
+ */
+/** True when this window already has a native Windows title bar (pop-outs). */
+export function hasNativeTitleBar(): boolean {
+  return window.opendev.app.platform() === 'win32' && !!document.documentElement.dataset.popout;
+}
+
+export function drawsWindowControls(): boolean {
+  const p = window.opendev.app.platform();
+  return p !== 'darwin' && p !== 'win32';
 }

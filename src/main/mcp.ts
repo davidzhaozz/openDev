@@ -14,14 +14,16 @@
 //     }
 //   }
 
-import { ipcMain } from 'electron';
+import { jiraStore } from './jira.js';
+import { app, ipcMain } from 'electron';
 import http from 'http';
 import os from 'os';
 import { randomBytes } from 'crypto';
 import { spawn } from 'child_process';
+import { cliChildEnv, commandShell } from './platform.js';
 import { promises as fs } from 'fs';
 import { join, isAbsolute, resolve } from 'path';
-import { rgPath } from '@vscode/ripgrep';
+import { rgPath } from './ripgrep.js';
 import { simpleGit } from 'simple-git';
 import { IPC } from '@shared/ipc';
 import { workspace, safeWithinRoot } from './workspace.js';
@@ -30,6 +32,7 @@ import { listListeningPorts } from './ports.js';
 import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
+import { listBrowserTokens, scanBrowserStorage } from './browserTokens.js';
 import { dbApi } from './db.js';
 import { mlxServer } from './localModels.js';
 import { listLocalModels } from './aiLocal.js';
@@ -39,8 +42,8 @@ import { onShutdown } from './lifecycle.js';
 import { LIMITS, capString, tail } from './limits.js';
 
 // Fixed by default so an editor's MCP config can hard-code the URL. The env
-// override exists so a second instance — notably the web server in
-// src/server/ — can run alongside the desktop app instead of losing the bind.
+// override exists so a second instance — notably the headless test server in
+// src/headless/ — can run alongside the desktop app instead of losing the bind.
 const PORT = Number(process.env.OPENDEV_MCP_PORT) || 53825;
 const HOST_LOOPBACK = '127.0.0.1';
 const HOST_ALL = '0.0.0.0';
@@ -106,6 +109,24 @@ function err(msg: string): { content: Array<{ type: 'text'; text: string }>; isE
   return { content: [{ type: 'text', text: msg }], isError: true };
 }
 
+const REST_AUTH_DOC = 'One of {kind:"none"} | {kind:"bearer", token} | {kind:"basic", username, password} | {kind:"browser", origin?}. '
+  + '"browser" borrows the bearer token the IDE browser panel last sent (to the request\'s own origin, else the most recent one) at send time — '
+  + 'use it for any endpoint that needs a signed-in user, instead of asking for a token. Pin origin (e.g. "http://localhost:8080") only when several APIs are captured.';
+
+// The saved-request shape, shared by ide_rest_save and each item of ide_rest_save_many.
+const REST_SAVED_PROPS = {
+  id: { type: 'string', description: 'Existing saved-request id, or omit to create new.' },
+  name: { type: 'string', description: 'Short label, e.g. "List users" or "Create order".' },
+  folder: { type: 'string', description: 'Group in the REST panel — one per resource/controller, e.g. "Users".' },
+  description: { type: 'string', description: 'What the endpoint does, its path/query params, required fields, and what it returns. Shown above the request in the REST tab.' },
+  method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] },
+  url: { type: 'string', description: 'Full runnable URL including scheme, host and port, with example values filled in for path params.' },
+  headers: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } } } },
+  params: { type: 'array', description: 'Query-string params.', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } } } },
+  body: { type: 'object', description: 'One of {kind:"none"} | {kind:"json", text:string} | {kind:"text", text:string, contentType?:string} | {kind:"form", fields:[{key,value,enabled?}]}. For json, text is the serialized example payload.' },
+  auth: { type: 'object', description: REST_AUTH_DOC }
+};
+
 const TOOLS: ToolDef[] = [
   { name: 'ide_workspace_root', description: 'Return the currently open workspace root path.', inputSchema: { type: 'object', properties: {} } },
   { name: 'ide_list_dir', description: 'List entries in a directory of the workspace.', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Absolute or workspace-relative path. Defaults to the workspace root.' } } } },
@@ -133,26 +154,36 @@ const TOOLS: ToolDef[] = [
     headers: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } }, required: ['key', 'value'] } },
     params: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' }, enabled: { type: 'boolean' } }, required: ['key', 'value'] } },
     body: { type: 'object', description: 'One of {kind:"none"} | {kind:"json", text:string} | {kind:"text", text:string, contentType?:string} | {kind:"form", fields:[{key,value,enabled?}]}.' },
-    auth: { type: 'object', description: 'One of {kind:"none"} | {kind:"bearer", token} | {kind:"basic", username, password}.' }
+    auth: { type: 'object', description: REST_AUTH_DOC }
   }, required: ['method', 'url'] } },
   { name: 'ide_rest_list_saved', description: 'List the saved REST requests in this workspace (the right-panel REST collection).', inputSchema: { type: 'object', properties: {} } },
   { name: 'ide_rest_get_saved', description: 'Return one saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
-  { name: 'ide_rest_save', description: 'Save (create or update) a REST request to the workspace collection. Pass an existing id to update, or omit it to create a fresh entry — a new id will be assigned and returned.', inputSchema: { type: 'object', properties: {
-    id: { type: 'string', description: 'Existing saved-request id, or omit to create new.' },
-    name: { type: 'string' },
-    folder: { type: 'string' },
-    method: { type: 'string' },
-    url: { type: 'string' },
-    headers: { type: 'array' },
-    params: { type: 'array' },
-    body: { type: 'object' },
-    auth: { type: 'object' }
-  }, required: ['name', 'method', 'url'] } },
+  { name: 'ide_rest_save', description: 'Save (create or update) ONE REST request to the workspace collection. Pass an existing id to update, or omit it to create a fresh entry — a new id will be assigned and returned. For more than one request use ide_rest_save_many.', inputSchema: { type: 'object', properties: REST_SAVED_PROPS, required: ['name', 'method', 'url'] } },
+  { name: 'ide_rest_save_many', description: 'Save many REST requests to the REST tab in one call. This is the tool for "generate REST calls for the APIs in this repo". '
+    + 'Workflow: (1) find every HTTP endpoint the repo defines (route decorators/annotations, router files, OpenAPI specs) — and, if asked, the external APIs it calls; '
+    + '(2) work out the base URL from config (ports, env files, launch settings) or ide_browser_tokens / ide_listening_ports; '
+    + '(3) emit one request per endpoint+method, folder = the resource/controller, ordered GET, POST, PUT, PATCH, DELETE; '
+    + 'each with a description, a runnable URL with example path/query values, and a realistic example JSON body built from the actual DTO/model fields; '
+    + '(4) use auth {kind:"browser"} for endpoints behind authentication. '
+    + 'Idempotent: an entry with the same folder + method + URL path is updated in place, so re-running refreshes the collection rather than duplicating it. The REST tab is opened automatically.',
+    inputSchema: { type: 'object', properties: {
+      requests: { type: 'array', items: { type: 'object', properties: REST_SAVED_PROPS, required: ['name', 'method', 'url'] } }
+    }, required: ['requests'] } },
+  { name: 'ide_browser_tokens', description: 'List the bearer tokens the IDE browser panel has sent (masked — the raw token never leaves the IDE), per API origin, with expiry. Shows which API hosts the signed-in app talks to. Pass scan:true to also read JWTs out of the page\'s local/sessionStorage. If this is empty, tell the user to open their app in the browser panel and sign in before sending requests that use auth {kind:"browser"}.', inputSchema: { type: 'object', properties: { scan: { type: 'boolean' } } } },
   { name: 'ide_rest_delete', description: 'Delete a saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'ide_rest_open_saved', description: 'Open a saved REST request in the center workspace, optionally sending it immediately. Use with id from ide_rest_list_saved.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, send: { type: 'boolean', description: 'If true, fire the request as soon as it loads.' } }, required: ['id'] } },
 
   // IDE panel control — the right column hosts AI/DB/ES/REST/ML/LLM; the bottom application bar hosts LOG/DEBUG. The AI can drive both.
-  { name: 'ide_set_right_tab', description: 'Switch the right-panel tab. Valid values: "ai", "db", "es", "rest", "ml", "llm".', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ai', 'db', 'es', 'rest', 'ml', 'llm'] } }, required: ['tab'] } },
+  { name: 'ide_jira_list', description: 'List the Jira tickets currently parked in the IDE\'s JIRA panel, with the state of each one\'s AI run (idle/running/done/failed/stopped).', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_jira_add', description: 'Add one or more Jira tickets to the JIRA panel as tasks to be completed. Pass issue keys (e.g. "BYZ-89"); each is fetched from Atlassian for its real summary, status and description. Use this when the user asks to add tickets to the jira tab.', inputSchema: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' }, description: 'Issue keys, e.g. ["BYZ-89","BYZ-90"].' } }, required: ['keys'] } },
+  { name: 'ide_jira_remove', description: 'Remove a ticket from the JIRA panel by its panel task id (from ide_jira_list). Does not touch the issue in Jira.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_jira_search', description: 'Search real Jira issues by JQL without adding them to the panel. Defaults to the user\'s open assigned issues.', inputSchema: { type: 'object', properties: { jql: { type: 'string' } } } },
+  { name: 'ide_jira_start', description: 'Start the AI run for a parked ticket (panel task id from ide_jira_list). The run works the ticket in the workspace and, on success, posts a summary comment back to the Jira issue and transitions it.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_jira_stop', description: 'Stop a running ticket\'s AI run (panel task id).', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'ide_jira_boards', description: 'List the ticket boards in this workspace (the .opendev/jira*.json files), with the ticket count in each and which one the JIRA panel is currently working in. Every other ide_jira_* tool operates on the active board.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ide_jira_rename_board', description: 'Rename a ticket board, keeping its tickets, and leave the JIRA panel on it. The name becomes the file name: "underwriting byz85" → .opendev/jira-underwriting-byz85.json. Pass the board to rename as a file name or label from ide_jira_boards; omit it to rename the active one.', inputSchema: { type: 'object', properties: { board: { type: 'string' }, name: { type: 'string', description: 'The new name, without the jira- prefix or .json suffix.' } }, required: ['name'] } },
+  { name: 'ide_jira_select_board', description: 'Switch the JIRA panel to another board, so ide_jira_list/add/start all operate on it. Pass the file name ("jira-accounting-byz89.json") or its label ("accounting-byz89"); use ide_jira_boards to discover them.', inputSchema: { type: 'object', properties: { board: { type: 'string' } }, required: ['board'] } },
+  { name: 'ide_set_right_tab', description: 'Switch the right-panel tab. Valid values: "ai", "db", "es", "rest", "ml", "llm", "jira".', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ai', 'db', 'es', 'rest', 'ml', 'llm', 'jira'] } }, required: ['tab'] } },
   { name: 'ide_get_right_tab', description: 'Return which right-panel tab is currently selected.', inputSchema: { type: 'object', properties: {} } },
   { name: 'ide_set_bottom_tab', description: 'Switch the bottom application-bar tab. Valid values: "log", "debug". Expands the bar if collapsed.', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['log', 'debug'] } }, required: ['tab'] } },
   { name: 'ide_get_bottom_tab', description: 'Return which bottom-bar tab is currently selected and whether the bar is collapsed.', inputSchema: { type: 'object', properties: {} } },
@@ -227,7 +258,12 @@ function dispatchToRenderer(cmd: RendererCmd) {
 
 async function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean; truncated?: boolean }> {
   return await new Promise((resolveP) => {
-    const proc = spawn(command, { cwd, shell: true, env: process.env });
+    // Same scrubbed env + pinned cmd.exe as every other CLI we spawn. This is
+    // the AI's own shell tool: a command it runs here (`claude -p …`, an npm
+    // script that shells out to it) has to land on ~/.claude like the rest of
+    // the AI stack, and `shell: true` alone would defer to COMSPEC — possibly
+    // PowerShell, profile and all. See cliChildEnv / systemCmdExe.
+    const proc = spawn(command, { cwd, shell: commandShell(), env: cliChildEnv() });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -258,6 +294,23 @@ async function runShell(command: string, cwd: string, timeoutMs: number): Promis
     });
     proc.on('error', (e) => { clearTimeout(t); resolveP({ stdout, stderr: stderr + (e.message), exitCode: -1, timedOut, truncated }); });
   });
+}
+
+function toSavedRequest(a: any): RestSavedRequest {
+  if (!a?.name || !a?.method || !a?.url) throw new Error('each request needs name, method, and url');
+  return {
+    id: String(a.id || `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    name: String(a.name),
+    folder: a.folder ? String(a.folder) : undefined,
+    description: a.description ? String(a.description) : undefined,
+    method: String(a.method).toUpperCase() as RestSavedRequest['method'],
+    url: String(a.url),
+    headers: Array.isArray(a.headers) ? a.headers : [],
+    params: Array.isArray(a.params) ? a.params : [],
+    body: a.body ?? { kind: 'none' },
+    auth: a.auth ?? { kind: 'none' },
+    updatedAt: Date.now()
+  };
 }
 
 async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> | ReturnType<typeof err>> {
@@ -429,22 +482,28 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
         return ok(r);
       }
       case 'ide_rest_save': {
-        if (!args?.name || !args?.method || !args?.url) throw new Error('name, method, and url required');
-        const id = String(args.id || `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-        const record: RestSavedRequest = {
-          id,
-          name: String(args.name),
-          folder: args.folder ? String(args.folder) : undefined,
-          method: args.method,
-          url: String(args.url),
-          headers: args.headers ?? [],
-          params: args.params ?? [],
-          body: args.body ?? { kind: 'none' },
-          auth: args.auth ?? { kind: 'none' },
-          updatedAt: Date.now()
-        };
+        const record = toSavedRequest(args);
         await restApi.saveRequest(record);
-        return ok({ id, saved: record });
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'rest' });
+        return ok({ id: record.id, saved: record });
+      }
+      case 'ide_rest_save_many': {
+        const items = Array.isArray(args?.requests) ? args.requests : [];
+        if (!items.length) throw new Error('requests required');
+        const r = await restApi.saveMany(items.map(toSavedRequest));
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'rest' });
+        const folders = [...new Set(items.map((i: any) => i.folder || '(no folder)'))];
+        return ok(`saved ${items.length} request(s): ${r.created} new, ${r.updated} updated, across ${folders.length} folder(s): ${folders.join(', ')}`);
+      }
+      case 'ide_browser_tokens': {
+        if (args?.scan) await scanBrowserStorage();
+        const tokens = listBrowserTokens();
+        if (!tokens.length) return ok('No bearer tokens captured yet. The user needs to open their app in the IDE browser panel and sign in (or pass scan:true after they have).');
+        return ok(tokens.map((t) => ({
+          origin: t.origin, lastUrl: t.url, source: t.source, token: t.preview,
+          expires: t.expiresAt ? new Date(t.expiresAt).toISOString() : 'unknown',
+          expired: t.expiresAt ? t.expiresAt < Date.now() : false
+        })));
       }
       case 'ide_rest_delete': {
         const id = String(args?.id ?? '');
@@ -458,10 +517,89 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
         dispatchToRenderer({ kind: 'open-rest-saved', savedId: id, send: !!args?.send });
         return ok(`opening saved request ${id}${args?.send ? ' (and sending)' : ''}`);
       }
+      case 'ide_jira_list': {
+        const tasks = await jiraStore.list();
+        return ok(JSON.stringify(tasks.map((t) => ({
+          id: t.id, key: t.key, title: t.title, jiraStatus: t.status,
+          run: t.state, lastLine: t.lastLine, reportedAt: t.reportedAt, reportError: t.reportError
+        })), null, 2));
+      }
+      case 'ide_jira_add': {
+        const keys = Array.isArray(args?.keys) ? args.keys.map(String) : [];
+        if (!keys.length) throw new Error('keys required');
+        const added: string[] = [];
+        const errors: string[] = [];
+        for (const k of keys) {
+          try { const t = await jiraStore.addByKey(k); added.push(`${t.key} (${t.id}) — ${t.title}`); }
+          catch (err: any) { errors.push(`${k}: ${err?.message ?? err}`); }
+        }
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'jira' });
+        return ok([
+          added.length ? `Added:\n${added.join('\n')}` : 'Nothing added.',
+          errors.length ? `\nFailed:\n${errors.join('\n')}` : ''
+        ].join(''));
+      }
+      case 'ide_jira_remove': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        await jiraStore.remove(id);
+        return ok(`removed ${id} from the JIRA panel`);
+      }
+      case 'ide_jira_boards': {
+        const { boards, active } = await jiraStore.boards();
+        return ok(JSON.stringify({
+          active,
+          boards: boards.map((b) => ({ file: b.file, label: b.label, tickets: b.count }))
+        }, null, 2));
+      }
+      case 'ide_jira_rename_board': {
+        const name = String(args?.name ?? '').trim();
+        if (!name) throw new Error('name required');
+        const { boards, active } = await jiraStore.boards();
+        const want = String(args?.board ?? '').trim() || active;
+        const hit = boards.find((b) => b.file.toLowerCase() === want.toLowerCase())
+          ?? boards.find((b) => b.label.toLowerCase() === want.toLowerCase());
+        if (!hit) {
+          throw new Error(`no such board: ${want} (have: ${boards.map((b) => b.label).join(', ') || 'none'})`);
+        }
+        const res = await jiraStore.renameBoard(hit.file, name);
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'jira' });
+        return ok(`renamed board "${hit.file}" to "${res.file}" — ${res.tasks.length} ticket(s), now active`);
+      }
+      case 'ide_jira_select_board': {
+        const want = String(args?.board ?? '').trim();
+        if (!want) throw new Error('board required');
+        const { boards } = await jiraStore.boards();
+        const hit = boards.find((b) => b.file.toLowerCase() === want.toLowerCase())
+          ?? boards.find((b) => b.label.toLowerCase() === want.toLowerCase());
+        if (!hit) {
+          throw new Error(`no such board: ${want} (have: ${boards.map((b) => b.label).join(', ') || 'none'})`);
+        }
+        const tasks = await jiraStore.selectBoard(hit.file);
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'jira' });
+        return ok(`JIRA panel is now on board "${hit.label}" (${hit.file}) — ${tasks.length} ticket(s)`);
+      }
+      case 'ide_jira_search': {
+        const issues = await jiraStore.search(args?.jql ? String(args.jql) : undefined);
+        return ok(JSON.stringify(issues.map((i) => ({ key: i.key, title: i.title, status: i.status })), null, 2));
+      }
+      case 'ide_jira_start': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        const t = await jiraStore.start(id);
+        if (!t) throw new Error(`no such task, or it is already running: ${id}`);
+        dispatchToRenderer({ kind: 'set-right-tab', tab: 'jira' });
+        return ok(`started run for ${t.key}`);
+      }
+      case 'ide_jira_stop': {
+        const id = String(args?.id ?? '');
+        if (!id) throw new Error('id required');
+        return ok(await jiraStore.stop(id) ? `stopped ${id}` : `${id} was not running`);
+      }
       case 'ide_set_right_tab': {
         const tab = String(args?.tab ?? '');
-        if (!['ai', 'db', 'es', 'rest', 'ml', 'llm'].includes(tab)) {
-          throw new Error('tab must be one of: ai, db, es, rest, ml, llm');
+        if (!['ai', 'db', 'es', 'rest', 'ml', 'llm', 'jira'].includes(tab)) {
+          throw new Error('tab must be one of: ai, db, es, rest, ml, llm, jira');
         }
         dispatchToRenderer({ kind: 'set-right-tab', tab });
         return ok(`right-tab set to ${tab}`);
@@ -667,6 +805,27 @@ export function registerMcpIpc() {
     status = { ...status, accessKey: fresh };
     return status;
   });
+}
+
+/**
+ * CLI args that hand this server to a Claude CLI the IDE spawns (the AI chat,
+ * Jira runs), so the built-in AI gets every ide_* tool without the user wiring
+ * ~/.claude.json by hand. Written to a file rather than passed inline: the
+ * JSON would have to survive cmd.exe quoting on Windows. Same server name as
+ * the Settings snippet, so a user who also configured it by hand does not get
+ * the tools twice. Empty when the server is off.
+ */
+export async function cliMcpConfigArgs(): Promise<string[]> {
+  if (!status.running || !status.url || !currentAccessKey) return [];
+  try {
+    const file = join(app.getPath('userData'), 'opendev-mcp.json');
+    const cfg = { mcpServers: { 'opendev-ide': { type: 'http', url: status.url, headers: { Authorization: `Bearer ${currentAccessKey}` } } } };
+    await fs.writeFile(file, JSON.stringify(cfg, null, 2), 'utf8');
+    return ['--mcp-config', file];
+  } catch (e: any) {
+    console.error('[mcp] could not write CLI config:', e?.message || e);
+    return [];
+  }
 }
 
 export async function stopIdeMcpServer(): Promise<void> {

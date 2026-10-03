@@ -226,6 +226,9 @@ export function applyTheme(theme: Theme) {
   root.style.setProperty('--syntax-operator', theme.syntax.operator);
   root.style.setProperty('--syntax-constant', theme.syntax.constant);
   root.style.setProperty('--syntax-tag', theme.syntax.tag);
+  // Windows paints its native caption buttons over the titlebar; match them
+  // to the titlebar background (.titlebar uses --bg-1) and its text.
+  try { void window.opendev.window.setOverlayColors(theme.bg1, theme.fg1).catch(() => {}); } catch { /* no bridge */ }
 }
 
 export function themeById(id: string | undefined): Theme {

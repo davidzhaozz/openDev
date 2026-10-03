@@ -6,6 +6,12 @@ export const IPC = {
   WorkspaceChanged: 'workspace:changed',
   WorkspaceClose: 'workspace:close',
   MenuEvent: 'menu:event',
+  // The application menu is invisible on the frameless (non-macOS) chrome —
+  // Windows renders a menu bar into the native frame, and there isn't one.
+  // These let the renderer draw the bar itself and pop the real submenus,
+  // so there is still exactly one menu definition.
+  MenuTopLevel: 'menu:top-level',
+  MenuPopup: 'menu:popup',
 
   // fs
   FsList: 'fs:list',
@@ -37,12 +43,26 @@ export const IPC = {
   // ai
   AiSend: 'ai:send',
   AiStream: 'ai:stream',
+  AiActivity: 'ai:activity',
   AiConversations: 'ai:conversations',
   AiConversationGet: 'ai:conversation-get',
   AiConversationDelete: 'ai:conversation-delete',
+  AiConversationRename: 'ai:conversation-rename',
   AiCancel: 'ai:cancel',
   AiLocalListModels: 'ai-local:list-models',
   AiLocalPickBinary: 'ai-local:pick-binary',
+
+  // Claude account (Settings -> AI). The IDE's AI children run against a
+  // pinned credential store (see cliChildEnv), so signing in has to happen
+  // against that same store — these drive `claude auth` there rather than in
+  // whatever account a terminal tab or shell profile would pick up.
+  AiAuthStatus: 'ai-auth:status',
+  AiAuthLoginStart: 'ai-auth:login-start',
+  AiAuthLoginSubmit: 'ai-auth:login-submit',
+  AiAuthLoginCancel: 'ai-auth:login-cancel',
+  AiAuthLogout: 'ai-auth:logout',
+  AiAuthLoginEvent: 'ai-auth:login-event',
+  AiAuthOpenUrl: 'ai-auth:open-url',
 
   // mcp
   McpStatus: 'mcp:status',
@@ -78,6 +98,25 @@ export const IPC = {
   TasksSave: 'tasks:save',
   TasksDelete: 'tasks:delete',
 
+  // jira
+  JiraList: 'jira:list',
+  JiraAdd: 'jira:add',
+  JiraRemove: 'jira:remove',
+  JiraRefresh: 'jira:refresh',
+  JiraSearch: 'jira:search',
+  JiraStart: 'jira:start',
+  JiraStop: 'jira:stop',
+  JiraLog: 'jira:log',
+  JiraTestConnection: 'jira:test-connection',
+  JiraConfigured: 'jira:configured',
+  JiraBoards: 'jira:boards',
+  JiraSelectBoard: 'jira:select-board',
+  JiraCreateBoard: 'jira:create-board',
+  JiraRenameBoard: 'jira:rename-board',
+  // main → renderer
+  JiraChanged: 'jira:changed',
+  JiraLogChunk: 'jira:log-chunk',
+
   // db
   DbConnectionsList: 'db:connections-list',
   DbConnectionsSave: 'db:connections-save',
@@ -93,6 +132,14 @@ export const IPC = {
   DbUpdateRows: 'db:update-rows',
 
   // git
+  PasswordsStatus: 'passwords:status',
+  PasswordsList: 'passwords:list',
+  PasswordsForOrigin: 'passwords:for-origin',
+  PasswordsSave: 'passwords:save',
+  PasswordsDelete: 'passwords:delete',
+  PasswordsNeverSave: 'passwords:never-save',
+  PasswordsAllowSave: 'passwords:allow-save',
+
   GitStatus: 'git:status',
   GitDiff: 'git:diff',
   GitStage: 'git:stage',
@@ -108,6 +155,7 @@ export const IPC = {
   GitBlame: 'git:blame',
   GitFileLog: 'git:file-log',
   GitShow: 'git:show',
+  GitFileAt: 'git:file-at',
   SessionSave: 'session:save',
   SessionLoad: 'session:load',
   WindowPopoutFile: 'window:popout-file',
@@ -118,6 +166,7 @@ export const IPC = {
   WindowMinimize: 'window:minimize',
   WindowMaximizeToggle: 'window:maximize-toggle',
   WindowClose: 'window:close',
+  WindowSetOverlayColors: 'window:set-overlay-colors',
   WindowMaximizedChanged: 'window:maximized-changed',
   GitWorktreeCreate: 'git:worktree-create',
   GitWorktreeList: 'git:worktree-list',
@@ -182,6 +231,9 @@ export const IPC = {
   RestListSaved: 'rest:list-saved',
   RestSave: 'rest:save',
   RestDelete: 'rest:delete',
+  RestBrowserTokens: 'rest:browser-tokens',
+  RestBrowserTokenReveal: 'rest:browser-token-reveal',
+  RestChanged: 'rest:changed',              // main → renderer (collection mutated)
 
   // run configurations (PyCharm-style)
   RunConfigsList: 'run-configs:list',
@@ -231,6 +283,25 @@ export const IPC = {
   MlxStop: 'mlx:stop',
   MlxStatus: 'mlx:status',
   MlxEvent: 'mlx:event',                  // main → renderer (parsed training events)
+
+  // network log. The list carries summaries only; bodies are pulled one row
+  // at a time so a few hundred captured calls don't sit in renderer memory.
+  NetworkList: 'network:list',
+  NetworkGet: 'network:get',
+  NetworkClear: 'network:clear',
+  NetworkSetCapture: 'network:set-capture',
+  NetworkCaptureState: 'network:capture-state',
+  NetworkEntry: 'network:entry',       // main → renderer (new or updated row)
+  NetworkCleared: 'network:cleared',   // main → renderer
+
+  // screen recorder. The video never crosses IPC in one piece — main opens
+  // the output file up front and the renderer appends MediaRecorder chunks
+  // as they arrive, so a long capture costs no renderer memory.
+  RecorderSources: 'recorder:sources',
+  RecorderStart: 'recorder:start',
+  RecorderChunk: 'recorder:chunk',
+  RecorderFinish: 'recorder:finish',
+  RecorderCancel: 'recorder:cancel',
 
   // memory watchdog (main → renderer)
   MemoryWarning: 'memory:warning',

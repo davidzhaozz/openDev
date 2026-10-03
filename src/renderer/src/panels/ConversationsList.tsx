@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useStore } from '../state/store';
+import { useVisiblePoll } from '../usePoll';
 import type { Conversation } from '../../../shared/types';
 
 function relativeTime(ts: number) {
@@ -18,7 +19,11 @@ export function ConversationsList() {
   const tabs = useStore(s => s.centerTabs);
   const openAiChatTab = useStore(s => s.openAiChatTab);
   const closeCenterTab = useStore(s => s.closeCenterTab);
+  const renameCenterTab = useStore(s => s.renameCenterTab);
   const showToast = useStore(s => s.showToast);
+  // id of the row being renamed, plus its draft title.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
 
   const refresh = async () => {
     try {
@@ -27,14 +32,40 @@ export function ConversationsList() {
     } catch {}
   };
 
-  useEffect(() => { refresh(); }, []);
+  // Refresh so conversations created in a center AI tab show up here without a
+  // page reload. Every tick re-reads the conversation store from disk, so it
+  // pauses with the window: nothing can be created from a window nobody can
+  // see, and the tick on becoming visible again catches anything that was.
+  useVisiblePoll(refresh, 4000);
 
-  // Refresh when the center tabs change — new conversations created in a
-  // center AI tab should show up here without a page reload.
-  useEffect(() => {
-    const id = setInterval(refresh, 4000);
-    return () => clearInterval(id);
-  }, []);
+  const startRename = (c: Conversation) => {
+    setRenaming(c.id);
+    setDraft(c.title || '');
+  };
+
+  const commitRename = async () => {
+    const id = renaming;
+    if (!id) return;
+    const title = draft.trim();
+    const current = history.find(c => c.id === id);
+    setRenaming(null);
+    if (!title || title === current?.title) return;
+    // Paint the new name immediately; the poll would otherwise take up to
+    // four seconds to catch up.
+    setHistory(prev => prev.map(c => (c.id === id ? { ...c, title } : c)));
+    // An open tab on this conversation shows the old title until it is
+    // reopened, so keep the two in step.
+    for (const t of useStore.getState().centerTabs) {
+      if (t.kind === 'ai' && t.conversationId === id) renameCenterTab(t.id, title);
+    }
+    try {
+      const ok = await window.opendev.ai.renameConversation(id, title);
+      if (!ok) showToast('Rename failed — the conversation file is gone.', 4000);
+    } catch (e: any) {
+      showToast(`Rename failed: ${e?.message || e}`, 4000);
+    }
+    refresh();
+  };
 
   const openConv = (c: Conversation) => {
     openAiChatTab({ conversationId: c.id, name: c.title || 'Chat' });
@@ -84,8 +115,10 @@ export function ConversationsList() {
       <div className="cv-list">
         {history.map(c => {
           const open = openConvIds.has(c.id);
+          const isRenaming = renaming === c.id;
           return (
             <div key={c.id} className={`cv-row ${open ? 'open' : ''}`} onClick={() => {
+              if (isRenaming) return;
               // Skip the open action if the user is selecting text in the row
               // — otherwise mouse-up ends the selection AND fires this handler,
               // which navigates away before they can copy.
@@ -94,14 +127,39 @@ export function ConversationsList() {
               openConv(c);
             }}>
               <div className="cv-text">
-                <div className="cv-title">
-                  {open && <span className="cv-open-dot">●</span>}
-                  {c.title || 'Untitled'}
-                </div>
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    className="cv-rename"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                      else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null); }
+                    }}
+                    onBlur={commitRename}
+                  />
+                ) : (
+                  <div
+                    className="cv-title"
+                    title="Double-click to rename"
+                    onDoubleClick={(e) => { e.stopPropagation(); startRename(c); }}
+                  >
+                    {open && <span className="cv-open-dot">●</span>}
+                    {c.title || 'Untitled'}
+                  </div>
+                )}
                 <div className="cv-sub">
-                  {relativeTime(c.updatedAt)} · {c.messages.length} msg
+                  {relativeTime(c.updatedAt)} · {c.messageCount ?? c.messages.length} msg
                 </div>
               </div>
+              <button
+                className="cv-edit"
+                onClick={(e) => { e.stopPropagation(); startRename(c); }}
+                title="Rename"
+              >✎</button>
               <button
                 className="cv-del"
                 onClick={(e) => { e.stopPropagation(); del(c.id); }}

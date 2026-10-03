@@ -7,9 +7,17 @@ import type { RestRequestSpec, RestSavedRequest } from '../../../shared/types';
 // opens a fresh request in the center workspace; the user can save it
 // from there to make it appear in this list.
 
+// Order within a folder: by path, so one endpoint's verbs sit together, then
+// by verb in CRUD order.
+const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+function pathOf(url: string): string {
+  try { return new URL(url).pathname; } catch { return url.replace(/[?#].*$/, ''); }
+}
+
 export function RestRequestsPanel() {
   const [items, setItems] = useState<RestSavedRequest[]>([]);
   const [filter, setFilter] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const openRestTab = useStore(s => s.openRestTab);
   const showToast = useStore(s => s.showToast);
   const triggerRestRun = useStore(s => s.triggerRestRun);
@@ -24,7 +32,19 @@ export function RestRequestsPanel() {
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+    // Main pings on every collection write — AI bulk saves, the workspace's
+    // Save button, another window.
+    return window.opendev.rest.onChanged(() => { refresh(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleFolder = (f: string) => setCollapsed(prev => {
+    const next = new Set(prev);
+    if (next.has(f)) next.delete(f); else next.add(f);
+    return next;
+  });
 
   const openNew = () => {
     openRestTab({ spec: emptyRestSpec(), name: 'New request', savedId: undefined });
@@ -37,7 +57,8 @@ export function RestRequestsPanel() {
       headers: r.headers,
       params: r.params,
       body: r.body,
-      auth: r.auth
+      auth: r.auth,
+      description: r.description
     };
     openRestTab({ spec, name: r.name || r.url || 'REST', savedId: r.id });
     if (andSend) triggerRestRun();
@@ -57,7 +78,8 @@ export function RestRequestsPanel() {
   const visible = filter.trim()
     ? items.filter(r => {
         const f = filter.toLowerCase();
-        return (r.name || '').toLowerCase().includes(f) || r.url.toLowerCase().includes(f) || r.method.toLowerCase().includes(f);
+        return (r.name || '').toLowerCase().includes(f) || r.url.toLowerCase().includes(f) || r.method.toLowerCase().includes(f)
+          || (r.folder || '').toLowerCase().includes(f) || (r.description || '').toLowerCase().includes(f);
       })
     : items;
 
@@ -67,6 +89,10 @@ export function RestRequestsPanel() {
     const k = r.folder || '';
     const arr = groups.get(k);
     if (arr) arr.push(r); else groups.set(k, [r]);
+  }
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => pathOf(a.url).localeCompare(pathOf(b.url))
+      || METHOD_ORDER.indexOf(a.method) - METHOD_ORDER.indexOf(b.method));
   }
   const sortedFolders = [...groups.keys()].sort((a, b) => {
     if (a === '' && b !== '') return -1;
@@ -93,14 +119,20 @@ export function RestRequestsPanel() {
         )}
         {sortedFolders.map(folder => (
           <div key={folder || '__root'} className="rest-folder">
-            {folder && <div className="rest-folder-name">{folder}</div>}
-            {groups.get(folder)!.map(r => (
+            {folder && (
+              <div className="rest-folder-name" onClick={() => toggleFolder(folder)}>
+                <span className="rest-folder-caret">{collapsed.has(folder) ? '▸' : '▾'}</span>
+                {folder}
+                <span className="rest-folder-count">{groups.get(folder)!.length}</span>
+              </div>
+            )}
+            {!collapsed.has(folder) && groups.get(folder)!.map(r => (
               <div
                 key={r.id}
                 className={`rest-row ${activeId === r.id ? 'active' : ''}`}
                 onClick={() => openSaved(r)}
                 onDoubleClick={() => openSaved(r, true)}
-                title={`${r.method} ${r.url}`}
+                title={r.description ? `${r.method} ${r.url}\n\n${r.description}` : `${r.method} ${r.url}`}
               >
                 <span className={`rest-method m-${r.method.toLowerCase()}`}>{r.method}</span>
                 <span className="rest-row-text">

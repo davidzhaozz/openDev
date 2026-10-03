@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ServiceDef } from '../../../shared/types';
 import { useStore } from '../state/store';
+import { useVisiblePoll } from '../usePoll';
 
 const URL_REGEX = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})\b/i;
 const PORT_REGEX = /(?:listening (?:at|on)[^\d]{1,40}|on port |port[:\s]+|^port )(\d{2,5})\b/im;
@@ -51,21 +52,19 @@ export function ServicesPanel() {
     clearPendingDraft(undefined);
   }, [pendingDraft, clearPendingDraft]);
 
-  // Poll lsof every 2s for ports actually bound by each running service's
-  // process group. Log-scraping alone misses backends that don't print a
-  // recognizable startup line (ts-node-dev, plain Node servers, etc.).
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const m = await window.opendev.services.ports();
-        if (alive) setLivePorts(m);
-      } catch {}
-    };
-    tick();
-    const t = setInterval(tick, 2000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+  // Poll for ports actually bound by each running service's process group.
+  // Log-scraping alone misses backends that don't print a recognizable startup
+  // line (ts-node-dev, plain Node servers, etc.).
+  //
+  // 4s, not 2s: a poll reads the listener table and the process tree, and this
+  // panel is mounted for the whole session rather than lazily like the
+  // right-hand tabs. useVisiblePoll stops it entirely while the window is
+  // minimized or occluded — the reading is only worth paying for when someone
+  // is looking at it.
+  useVisiblePoll(async () => {
+    try { setLivePorts(await window.opendev.services.ports()); }
+    catch {}
+  }, 4000);
 
   const refresh = async () => setServices(await window.opendev.services.list());
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from './state/store';
+import { useStore, type RightTabKey } from './state/store';
 import { FileTree } from './components/FileTree';
 import { CodeEditor } from './components/Editor';
 import { TerminalView } from './components/Terminal';
@@ -18,6 +18,7 @@ import { BrowserPanel } from './panels/BrowserPanel';
 import { DiffWorkspace } from './panels/DiffWorkspace';
 import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
+import { MermaidWorkspace } from './panels/MermaidWorkspace';
 import { AgentsPanel } from './panels/AgentsPanel';
 import { AgentRunWorkspace } from './panels/AgentRunWorkspace';
 import { DbConnectionsPanel } from './panels/DbConnectionsPanel';
@@ -27,12 +28,16 @@ import { RestWorkspace } from './panels/RestWorkspace';
 import { RestRequestsPanel } from './panels/RestRequestsPanel';
 import { MlxPanel } from './panels/MlxPanel';
 import { LlmPanel } from './panels/LlmPanel';
+import { JiraPanel } from './panels/JiraPanel';
 import { PipPanel } from './panels/PipPanel';
+import { NetworkPanel } from './panels/NetworkPanel';
+import { NetworkWorkspace } from './panels/NetworkWorkspace';
 import { PythonPicker } from './components/PythonPicker';
 import { RunBar } from './components/RunBar';
 import { BottomBar } from './components/BottomBar';
-import { baseName, dirName, pathToFileUri, shortenHome } from '@shared/paths';
-import { WindowControls, usesFramelessChrome } from './components/WindowControls';
+import { baseName, dirName, isMermaidPath, pathToFileUri, shortenHome } from '@shared/paths';
+import { WindowControls, usesFramelessChrome, drawsWindowControls } from './components/WindowControls';
+import { MenuBar } from './components/MenuBar';
 import { modKey } from './platformUi';
 
 export default function App() {
@@ -53,6 +58,20 @@ export default function App() {
   const [tabCtx, setTabCtx] = useState<{ x: number; y: number; id: string } | null>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | undefined>();
   const [renameDraft, setRenameDraft] = useState('');
+
+  // Renaming a tab used to be cosmetic and per-session: an AI tab kept the
+  // conversation's stored title, so the old name came back the moment the
+  // chat was reopened from the history panel. Persist it too.
+  const commitTabRename = (id: string, next: string) => {
+    const tab = useStore.getState().centerTabs.find(t => t.id === id);
+    if (!tab) return;
+    const name = next.trim() || tab.name;
+    renameCenterTab(id, name);
+    if (tab.kind === 'ai' && tab.conversationId) {
+      window.opendev.ai.renameConversation(tab.conversationId, name).catch(() => { /* best effort */ });
+    }
+  };
+
   const modal = useStore(s => s.modal);
   const setModal = useStore(s => s.setModal);
   const rightTab = useStore(s => s.rightTab);
@@ -206,7 +225,7 @@ export default function App() {
         } else if (t.kind === 'browser' && t.url) {
           useStore.getState().openBrowserTab(t.url, t.name);
         } else if (t.kind === 'sql') {
-          useStore.getState().openSqlTab();
+          useStore.getState().openSqlTab({ text: t.text, connId: t.connId, name: t.name });
         } else if (t.kind === 'es') {
           useStore.getState().openEsTab();
         } else if (t.kind === 'ai') {
@@ -218,11 +237,12 @@ export default function App() {
       // Validate the restored tab against the current set; fall back to
       // 'ai' if the saved value is from a previous layout. (LOG/DEBUG used
       // to live here too — those sessions now restore as 'ai'.)
-      const validTabs = ['ai', 'db', 'es', 'rest', 'ml', 'llm'] as const;
+      const validTabs = ['ai', 'db', 'es', 'rest', 'ml', 'llm', 'jira', 'net'] as const;
       const restoredTab = validTabs.includes(s.rightTab as any) ? s.rightTab : 'ai';
-      useStore.getState().setRightTab(restoredTab as 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm');
+      useStore.getState().setRightTab(restoredTab as RightTabKey);
+      // sqlConnId is the DB panel's browse selection, and also seeds the
+      // connection for consoles opened later.
       if (s.sqlConnId) useStore.getState().setSqlConnId(s.sqlConnId);
-      if (s.sqlText) useStore.getState().setSqlText(s.sqlText);
       if (s.esText) useStore.getState().setEsText(s.esText);
       if (s.activeIndex != null) {
         const tabs = useStore.getState().centerTabs;
@@ -239,12 +259,14 @@ export default function App() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const state = useStore.getState();
-      type SessionTab = { kind: string; name?: string; path?: string; cwd?: string; url?: string; conversationId?: string };
+      type SessionTab = { kind: string; name?: string; path?: string; cwd?: string; url?: string; conversationId?: string; text?: string; connId?: string };
       const tabs = state.centerTabs.flatMap((t): SessionTab[] => {
         if (t.kind === 'file') return [{ kind: 'file', path: t.path }];
         if (t.kind === 'terminal') return [{ kind: 'terminal', name: t.name, cwd: t.cwd }];
         if (t.kind === 'browser') return [{ kind: 'browser', name: t.name, url: t.url }];
         if (t.kind === 'ai') return [{ kind: 'ai', name: t.name, conversationId: t.conversationId }];
+        // Each console persists its own query and connection.
+        if (t.kind === 'sql') return [{ kind: 'sql', name: t.name, text: t.text, connId: t.connId }];
         // design-proposals and agent-run are ephemeral — don't persist them.
         if (t.kind === 'design-proposals' || t.kind === 'agent-run') return [];
         return [{ kind: t.kind, name: t.name }];
@@ -255,7 +277,6 @@ export default function App() {
         activeIndex: activeIndex >= 0 ? activeIndex : undefined,
         rightTab: state.rightTab,
         sqlConnId: state.sqlConnId,
-        sqlText: state.sqlText,
         esText: state.esText
       };
       window.opendev.session.save(session).catch(() => {});
@@ -317,7 +338,9 @@ export default function App() {
 
   // Pick the right center workspace based on which right-panel tab is open.
   useEffect(() => {
-    if (rightTab === 'db') openSqlTab();
+    // Switching to the DB panel should reuse a console rather than pile
+    // up empty ones; only an explicit table click opens a new tab.
+    if (rightTab === 'db') openSqlTab({ focusExisting: true });
     else if (rightTab === 'es') openEsTab();
   }, [rightTab, openSqlTab, openEsTab]);
 
@@ -335,8 +358,12 @@ export default function App() {
       // Folder picker first, then the form modal pre-filled with the dest.
       const dest = await window.opendev.projects.pickDir();
       if (dest) setModal('new-project', { dest });
+    } else if (action === 'find-file') {
+      setModal('fuzzy');
+    } else if (action === 'find-in-files') {
+      setModal('find');
     }
-  }, [setWorkspaceRoot]);
+  }, [setWorkspaceRoot, setModal]);
 
   // Listen for native menu events
   useEffect(() => window.opendev.menu.onEvent(runMenuAction), [runMenuAction]);
@@ -371,7 +398,9 @@ export default function App() {
 
   // Push an editor-state snapshot to the main process so the MCP server can
   // answer "what is the user looking at right now" without a renderer
-  // roundtrip. Snapshot whenever tabs/active change.
+  // roundtrip. Snapshot whenever tabs/active change — debounced, because the
+  // snapshot carries the whole active file and `tabs` changes on every
+  // keystroke; cloning a large buffer across IPC per key was pure overhead.
   const treeExpanded = useStore(s => s.treeExpanded);
   const treeSelected = useStore(s => s.treeSelected);
   useEffect(() => {
@@ -391,7 +420,8 @@ export default function App() {
       treeExpanded,
       treeSelected
     };
-    try { window.opendev.mcp.pushEditorSnapshot(snap); } catch {}
+    const t = setTimeout(() => { try { window.opendev.mcp.pushEditorSnapshot(snap); } catch {} }, 300);
+    return () => clearTimeout(t);
   }, [tabs, activeId, root, rightTab, bottomTab, bottomCollapsed, treeExpanded, treeSelected]);
 
   // Listen for MCP-initiated commands (e.g. an AI asking the IDE to open a file).
@@ -415,7 +445,7 @@ export default function App() {
           const r = list.find(x => x.id === cmd.savedId);
           if (!r) return;
           useStore.getState().openRestTab({
-            spec: { method: r.method, url: r.url, headers: r.headers, params: r.params, body: r.body, auth: r.auth },
+            spec: { method: r.method, url: r.url, headers: r.headers, params: r.params, body: r.body, auth: r.auth, description: r.description },
             name: r.name || r.url || 'REST',
             savedId: r.id
           });
@@ -491,9 +521,11 @@ export default function App() {
         <div className="titlebar">
           <span className="title">OpenDev IDE</span>
           <span className="path">v{window.opendev.app.version()} · (no workspace open)</span>
+          {usesFramelessChrome() && <MenuBar />}
           <div className="actions">
             <button onClick={() => setShowSettings(true)}>Settings</button>
           </div>
+          {drawsWindowControls() && <WindowControls />}
         </div>
         <Welcome onOpen={openPath} onPick={pickWorkspace} />
         {showSettings && <Settings onClose={() => setShowSettings(false)} />}
@@ -521,7 +553,8 @@ export default function App() {
       <div className="titlebar">
         <span className="title">{projectName}</span>
         <span className="path">{projectParent} · v{window.opendev.app.version()}</span>
-        {usesFramelessChrome() && <WindowControls />}
+        {usesFramelessChrome() && <MenuBar />}
+        {drawsWindowControls() && <WindowControls />}
       </div>
 
       <div className="workspace">
@@ -555,7 +588,7 @@ export default function App() {
           <div className="center-editor">
             <div className="tabs">
               {tabs.map(t => {
-                const icon = t.kind === 'terminal' ? '⌨ ' : t.kind === 'browser' ? '🌐 ' : t.kind === 'sql' ? '⚡ ' : t.kind === 'es' ? '🔍 ' : t.kind === 'rest' ? '⇆ ' : t.kind === 'diff' ? '⇄ ' : t.kind === 'ai-task' ? '✦ ' : t.kind === 'ai' ? '🤖 ' : t.kind === 'design-proposals' ? '◫ ' : '';
+                const icon = t.kind === 'file' && isMermaidPath(t.path) ? '◇ ' : t.kind === 'terminal' ? '⌨ ' : t.kind === 'browser' ? '🌐 ' : t.kind === 'sql' ? '⚡ ' : t.kind === 'es' ? '🔍 ' : t.kind === 'rest' ? '⇆ ' : t.kind === 'diff' ? '⇄ ' : t.kind === 'ai-task' ? '✦ ' : t.kind === 'ai' ? '🤖 ' : t.kind === 'design-proposals' ? '◫ ' : '';
                 const isRenaming = renamingTabId === t.id;
                 return (
                   <div
@@ -595,11 +628,12 @@ export default function App() {
                       setTimeout(() => {
                         try {
                           if (state.kind === 'file') {
-                            window.opendev.window.popoutFile(state.path);
+                            window.opendev.window.popoutFile(state.path, { atCursor: true });
                           } else {
                             window.opendev.window.popoutAi({
                               conversationId: state.conversationId,
-                              name: state.name
+                              name: state.name,
+                              atCursor: true
                             });
                           }
                           closeTab(id);
@@ -623,10 +657,10 @@ export default function App() {
                         onChange={(e) => setRenameDraft(e.target.value)}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') { renameCenterTab(t.id, renameDraft.trim() || t.name); setRenamingTabId(undefined); }
+                          if (e.key === 'Enter') { commitTabRename(t.id, renameDraft); setRenamingTabId(undefined); }
                           else if (e.key === 'Escape') { setRenamingTabId(undefined); }
                         }}
-                        onBlur={() => { renameCenterTab(t.id, renameDraft.trim() || t.name); setRenamingTabId(undefined); }}
+                        onBlur={() => { commitTabRename(t.id, renameDraft); setRenamingTabId(undefined); }}
                       />
                     ) : (
                       <span>{icon}{t.name}</span>
@@ -702,25 +736,40 @@ export default function App() {
                         </div>
                       )}
                       <div style={{ flex: 1, minHeight: 0 }}>
-                        <CodeEditor
-                          path={t.path}
-                          value={t.dirtyContent ?? t.content}
-                          onChange={(s) => updateContent(t.id, s)}
-                          onSave={async () => {
-                            await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
-                            markSaved(t.id);
-                          }}
-                          onJumpTo={jumpTo}
-                        />
+                        {isMermaidPath(t.path) ? (
+                          <MermaidWorkspace
+                            path={t.path}
+                            value={t.dirtyContent ?? t.content}
+                            active={activeId === t.id}
+                            onChange={(s) => updateContent(t.id, s)}
+                            onSave={async () => {
+                              await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
+                              markSaved(t.id);
+                            }}
+                            onJumpTo={jumpTo}
+                          />
+                        ) : (
+                          <CodeEditor
+                            path={t.path}
+                            value={t.dirtyContent ?? t.content}
+                            onChange={(s) => updateContent(t.id, s)}
+                            onSave={async () => {
+                              await window.opendev.fs.write(t.path, t.dirtyContent ?? t.content);
+                              markSaved(t.id);
+                            }}
+                            onJumpTo={jumpTo}
+                          />
+                        )}
                       </div>
                     </div>
                   )}
-                  {t.kind === 'terminal' && <TerminalView cwd={t.cwd} />}
+                  {t.kind === 'terminal' && <TerminalView cwd={t.cwd} active={activeId === t.id} />}
                   {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} />}
-                  {t.kind === 'sql' && <SqlWorkspace />}
+                  {t.kind === 'sql' && <SqlWorkspace tabId={t.id} />}
                   {t.kind === 'es' && <EsWorkspace />}
                   {t.kind === 'rest' && <RestWorkspace tabId={t.id} />}
                   {t.kind === 'pip' && <PipPanel />}
+                  {t.kind === 'net' && <NetworkWorkspace entryId={t.entryId} />}
                   {t.kind === 'diff' && <DiffWorkspace filePath={t.filePath} hash={t.hash} diff={t.diff} />}
                   {t.kind === 'ai-task' && <AiTaskWorkspace />}
                   {t.kind === 'ai' && (
@@ -750,11 +799,13 @@ export default function App() {
               ['es', 'ES'],
               ['rest', 'REST'],
               ['llm', 'LLM'],
+              ['jira', 'JIRA'],
+              ['net', 'NETWORK'],
               ...(mlxDetected ? [['ml', 'ML'] as const] : [])
             ] as const).map(([k, label]) => (
               <div key={k}
                 className={`right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k as 'ai' | 'db' | 'es' | 'rest' | 'ml' | 'llm')}>{label}</div>
+                onClick={() => setRightTab(k)}>{label}</div>
             ))}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -787,6 +838,16 @@ export default function App() {
             {rightTab === 'llm' && (
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <LlmPanel />
+              </div>
+            )}
+            {rightTab === 'jira' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <JiraPanel />
+              </div>
+            )}
+            {rightTab === 'net' && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <NetworkPanel />
               </div>
             )}
             {mlxDetected && rightTab === 'ml' && (

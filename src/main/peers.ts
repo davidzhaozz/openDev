@@ -14,7 +14,7 @@ import { onShutdown } from './lifecycle.js';
 import { workspace } from './workspace.js';
 import { bundleRepo, applyBundle, peerRepoDir } from './git.js';
 import { resolveBinPath } from './ai.js';
-import { detachedSpawnOptions, spawnBin } from './platform.js';
+import { cliChildEnv, detachedSpawnOptions, spawnBin } from './platform.js';
 import { baseName } from '@shared/paths';
 
 // LAN machine-linking. Two OpenDev IDE instances that share a link key discover
@@ -345,8 +345,11 @@ class PeerManager {
     const entryAbs = join(agentDir, payload.manifest.entry);
 
     let cmd: string;
+    // Scrubbed + home-pinned like a local agent run: this job was dispatched
+    // from another machine, but the CLI it drives has to authenticate as
+    // *this* account, out of this account's ~/.claude. See cliChildEnv.
     const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
+      ...cliChildEnv(),
       OPENDEV_WORKSPACE_ROOT: repoDir,
       OPENDEV_AGENT_DIR: agentDir,
       FORCE_COLOR: '1'

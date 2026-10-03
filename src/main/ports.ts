@@ -60,7 +60,40 @@ function portFromLocalAddress(address: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// The netstat scrape is shared: the services panel asks for every running
+// service's ports on one timer, and on a machine where spawning a process
+// costs seconds, one netstat per poll is the difference between a stable
+// reading and a queue of overlapping scrapes that never catches up.
+let listenerCache: { at: number; ports: ListeningPort[] } | null = null;
+let listenerInFlight: Promise<ListeningPort[]> | null = null;
+
+/** Listener table without process names — no tasklist spawn. */
+// Default age sits just above the services panel's 4s poll, so every other
+// tick is served from cache instead of spawning netstat each time.
+export async function listListeningPortsFast(maxAgeMs = 4500): Promise<ListeningPort[]> {
+  if (!IS_WIN) return listListeningPortsPosix();
+  if (listenerCache && Date.now() - listenerCache.at < maxAgeMs) return listenerCache.ports;
+  if (listenerInFlight) return listenerInFlight;
+  listenerInFlight = (async () => {
+    try {
+      const ports = await netstatListeners();
+      listenerCache = { at: Date.now(), ports };
+      return ports;
+    } catch {
+      // Keep the last good reading rather than reporting "nothing is listening".
+      return listenerCache?.ports ?? [];
+    } finally {
+      listenerInFlight = null;
+    }
+  })();
+  return listenerInFlight;
+}
+
 async function listListeningPortsWindows(): Promise<ListeningPort[]> {
+  return withProcessNames(await netstatListeners());
+}
+
+async function netstatListeners(): Promise<ListeningPort[]> {
   const { stdout } = await pexecFile('netstat', ['-ano'], {
     maxBuffer: 8 * 1024 * 1024,
     timeout: 8000,
@@ -81,7 +114,7 @@ async function listListeningPortsWindows(): Promise<ListeningPort[]> {
     // tasklist fills the name in below; PID is the honest placeholder.
     ports.push({ port, pid, protocol: 'tcp', command: `pid ${pid}` });
   }
-  return withProcessNames(ports);
+  return ports;
 }
 
 /** netstat gives PIDs but no names; tasklist fills them in with one extra call. */
@@ -90,7 +123,7 @@ async function withProcessNames(ports: ListeningPort[]): Promise<ListeningPort[]
   try {
     const { stdout } = await pexecFile('tasklist', ['/FO', 'CSV', '/NH'], {
       maxBuffer: 8 * 1024 * 1024,
-      timeout: 8000,
+      timeout: 20000,
       windowsHide: true
     });
     const names = new Map<number, string>();

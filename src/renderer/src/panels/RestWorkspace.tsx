@@ -3,12 +3,12 @@ import { useStore } from '../state/store';
 import { Resizer } from '../components/Resizer';
 import { JsonTree } from '../components/JsonTree';
 import { QueryHistoryButton } from '../components/QueryHistoryButton';
-import type { RestAuth, RestBody, RestHeader, RestMethod, RestParam, RestRequestSpec, RestResponse, RestSavedRequest } from '../../../shared/types';
+import type { BrowserTokenInfo, RestAuth, RestBody,RestHeader, RestMethod, RestParam, RestRequestSpec, RestResponse, RestSavedRequest } from '../../../shared/types';
 import { modKey } from '../platformUi';
 
 const METHODS: RestMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
-type EditorTab = 'params' | 'headers' | 'body' | 'auth';
+type EditorTab = 'params' | 'headers' | 'body' | 'auth' | 'docs';
 
 function looksJson(ct?: string): boolean {
   if (!ct) return false;
@@ -131,13 +131,19 @@ export function RestWorkspace({ tabId }: { tabId: string }) {
         <QueryHistoryButton kind="rest" refreshKey={historyTick} onPick={restoreFromHistory} />
       </div>
 
+      {spec.description && tab !== 'docs' && (
+        <div className="rest-description" title="Edit in the Docs tab" onClick={() => setTab('docs')}>
+          {spec.description}
+        </div>
+      )}
+
       <div className="rest-tabs">
-        {(['params', 'headers', 'body', 'auth'] as EditorTab[]).map(k => (
+        {(['params', 'headers', 'body', 'auth', 'docs'] as EditorTab[]).map(k => (
           <div key={k}
             className={`rest-tab ${tab === k ? 'active' : ''}`}
             onClick={() => setTab(k)}
           >
-            {k === 'params' ? 'Params' : k === 'headers' ? 'Headers' : k === 'body' ? 'Body' : 'Auth'}
+            {k === 'params' ? 'Params' : k === 'headers' ? 'Headers' : k === 'body' ? 'Body' : k === 'auth' ? 'Auth' : 'Docs'}
             {k === 'params' && spec.params.filter(p => (p.enabled ?? true) && p.key).length > 0 && <span className="rest-tab-count">{spec.params.filter(p => (p.enabled ?? true) && p.key).length}</span>}
             {k === 'headers' && spec.headers.filter(h => (h.enabled ?? true) && h.key).length > 0 && <span className="rest-tab-count">{spec.headers.filter(h => (h.enabled ?? true) && h.key).length}</span>}
             {k === 'body' && spec.body.kind !== 'none' && <span className="rest-tab-dot" />}
@@ -165,7 +171,17 @@ export function RestWorkspace({ tabId }: { tabId: string }) {
           <BodyEditor body={spec.body} onChange={(body) => patch({ body })} />
         )}
         {tab === 'auth' && (
-          <AuthEditor auth={spec.auth} onChange={(auth) => patch({ auth })} />
+          <AuthEditor auth={spec.auth} url={spec.url} onChange={(auth) => patch({ auth })} />
+        )}
+        {tab === 'docs' && (
+          <div className="rest-body-editor">
+            <textarea
+              className="rest-body-textarea"
+              value={spec.description || ''}
+              onChange={(e) => patch({ description: e.target.value || undefined })}
+              placeholder="What this endpoint does, its parameters, and what it returns. Saved with the request; never sent."
+            />
+          </div>
         )}
       </div>
 
@@ -339,11 +355,56 @@ function BodyEditor({ body, onChange }: { body: RestBody; onChange: (b: RestBody
   );
 }
 
-function AuthEditor({ auth, onChange }: { auth: RestAuth; onChange: (a: RestAuth) => void }) {
+function ageOf(ms: number): string {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+}
+
+function expiryOf(t: BrowserTokenInfo): string {
+  if (!t.expiresAt) return '';
+  const mins = Math.round((t.expiresAt - Date.now()) / 60000);
+  return mins <= 0 ? ' · expired' : ` · expires in ${mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`}`;
+}
+
+/**
+ * Tokens the browser panel has sent, and which one a request to `url` would
+ * borrow. Re-polls while visible: the capture fills in as the user clicks
+ * around the app, and nothing pushes that to the renderer.
+ */
+function useBrowserTokens(url: string, origin: string | undefined, active: boolean) {
+  const [state, setState] = useState<{ tokens: BrowserTokenInfo[]; match: BrowserTokenInfo | null; cookies: number }>({ tokens: [], match: null, cookies: 0 });
+  const load = (scan = false) =>
+    window.opendev.rest.browserTokens({ url, origin, scan }).then(setState).catch(() => {});
+  useEffect(() => {
+    if (!active) return;
+    load();
+    const t = setInterval(() => load(), 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, origin, active]);
+  return { ...state, scan: () => load(true) };
+}
+
+function AuthEditor({ auth, url, onChange }: { auth: RestAuth; url: string; onChange: (a: RestAuth) => void }) {
+  const showToast = useStore(s => s.showToast);
+  const pinned = auth.kind === 'browser' ? auth.origin : undefined;
+  const { tokens, match, cookies, scan } = useBrowserTokens(url, pinned, auth.kind === 'browser' || auth.kind === 'bearer');
+
+  // One-shot copy into a plain Bearer, for a request that should keep working
+  // after the browser panel is closed.
+  const borrowOnce = async () => {
+    const token = await window.opendev.rest.revealBrowserToken({ url, origin: pinned }).catch(() => null);
+    if (!token) { showToast('No bearer token captured yet — sign in to your app in the browser panel first.', 4000); return; }
+    onChange({ kind: 'bearer', token });
+    showToast('Token copied from the browser.', 2000);
+  };
+
   return (
     <div className="rest-auth-editor">
       <div className="rest-body-modes">
-        {(['none', 'bearer', 'basic'] as const).map(k => (
+        {(['none', 'bearer', 'browser', 'basic'] as const).map(k => (
           <label key={k} className={`rest-body-mode ${auth.kind === k ? 'active' : ''}`}>
             <input
               type="radio"
@@ -352,25 +413,77 @@ function AuthEditor({ auth, onChange }: { auth: RestAuth; onChange: (a: RestAuth
               onChange={() => {
                 if (k === 'none') onChange({ kind: 'none' });
                 else if (k === 'bearer') onChange({ kind: 'bearer', token: auth.kind === 'bearer' ? auth.token : '' });
+                else if (k === 'browser') onChange({ kind: 'browser' });
                 else onChange({ kind: 'basic', username: auth.kind === 'basic' ? auth.username : '', password: auth.kind === 'basic' ? auth.password : '' });
               }}
             />
-            {k === 'none' ? 'None' : k === 'bearer' ? 'Bearer Token' : 'Basic'}
+            {k === 'none' ? 'None' : k === 'bearer' ? 'Bearer Token' : k === 'browser' ? 'From Browser' : 'Basic'}
           </label>
         ))}
       </div>
       {auth.kind === 'none' && <div className="rest-body-empty">No auth header will be set.</div>}
       {auth.kind === 'bearer' && (
-        <div className="rest-auth-row">
-          <label>Token</label>
-          <input
-            className="rest-auth-input"
-            type="password"
-            placeholder="eyJhbGciOi…"
-            value={auth.token}
-            onChange={(e) => onChange({ kind: 'bearer', token: e.target.value })}
-          />
-        </div>
+        <>
+          <div className="rest-auth-row">
+            <label>Token</label>
+            <input
+              className="rest-auth-input"
+              type="password"
+              placeholder="eyJhbGciOi…"
+              value={auth.token}
+              onChange={(e) => onChange({ kind: 'bearer', token: e.target.value })}
+            />
+          </div>
+          <div className="rest-auth-row">
+            <span />
+            <div className="rest-borrow">
+              <button onClick={borrowOnce} disabled={tokens.length === 0}>Borrow from browser</button>
+              <span className="rest-body-empty">
+                {match ? `${match.origin} · ${match.preview}${expiryOf(match)}` : 'No token seen in the browser panel yet.'}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+      {auth.kind === 'browser' && (
+        <>
+          <div className="rest-body-empty">
+            Sends the bearer token your app last used in the browser panel, picked up fresh on every send —
+            so it keeps working when the app refreshes its token. Apps that sign in with a session cookie instead
+            (next-auth and similar) get the browser panel&apos;s cookies for the URL. Nothing is saved with the request.
+          </div>
+          <div className="rest-auth-row">
+            <label>API origin</label>
+            <select
+              className="rest-auth-input"
+              value={pinned || ''}
+              onChange={(e) => onChange({ kind: 'browser', origin: e.target.value || undefined })}
+            >
+              <option value="">Auto — match this request&apos;s URL</option>
+              {[...new Set(tokens.map(t => t.origin))].map(o => <option key={o} value={o}>{o}</option>)}
+              {pinned && !tokens.some(t => t.origin === pinned) && <option value={pinned}>{pinned}</option>}
+            </select>
+          </div>
+          <div className="rest-auth-row">
+            <label>Will send</label>
+            <div className="rest-borrow">
+              <span className={match || cookies ? 'rest-token-ok' : 'rest-token-missing'}>
+                {match
+                  ? `${match.preview} — ${match.source === 'header' ? 'sent to' : 'stored by'} ${match.origin}, ${ageOf(match.seenAt)}${expiryOf(match)}`
+                  : cookies
+                    ? `No bearer — will send the browser's ${cookies} cookie${cookies === 1 ? '' : 's'} for this URL (session-cookie sign-in)`
+                    : 'Nothing captured yet. Open your app in the browser panel and sign in.'}
+              </span>
+            </div>
+          </div>
+          <div className="rest-auth-row">
+            <span />
+            <div className="rest-borrow">
+              <button onClick={scan} title="Look for a JWT in the page's localStorage / sessionStorage">Scan page storage</button>
+              <button onClick={borrowOnce} disabled={!match} title="Freeze the current token into a plain Bearer auth">Copy into Bearer</button>
+            </div>
+          </div>
+        </>
       )}
       {auth.kind === 'basic' && (
         <>

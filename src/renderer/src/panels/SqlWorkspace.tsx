@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useStore } from '../state/store';
+import type { CenterTab, SqlResult } from '../state/store';
 import { Resizer } from '../components/Resizer';
 import { QueryHistoryButton } from '../components/QueryHistoryButton';
+import { SqlHintEditor } from '../components/SqlHintEditor';
+import type { DbSchema } from '../../../shared/types';
 import { modKey } from '../platformUi';
 
 function formatCell(v: unknown): ReactNode {
@@ -64,16 +67,30 @@ function inputToValue(text: string, original: unknown): unknown {
   return text;
 }
 
-export function SqlWorkspace() {
-  const sqlText = useStore(s => s.sqlText);
-  const setSqlText = useStore(s => s.setSqlText);
-  const sqlConnId = useStore(s => s.sqlConnId);
-  const sqlResult = useStore(s => s.sqlResult);
-  const setSqlResult = useStore(s => s.setSqlResult);
-  const sqlSource = useStore(s => s.sqlSource);
+export function SqlWorkspace({ tabId }: { tabId: string }) {
+  // Every console owns its query, connection, result and run counter, so a
+  // second table click opens a new tab instead of overwriting this one.
+  const tab = useStore(s =>
+    s.centerTabs.find((t): t is Extract<CenterTab, { kind: 'sql' }> => t.id === tabId && t.kind === 'sql'));
+  const patchSqlTab = useStore(s => s.patchSqlTab);
+
+  const sqlText = tab?.text ?? '';
+  const sqlConnId = tab?.connId;
+  const sqlResult = tab?.result;
+  const sqlSource = tab?.source;
+
+  const setSqlText = useCallback((text: string, opts?: { keepSource?: boolean }) => {
+    // A hand-edit detaches the console from the table it was opened from —
+    // the editable grid can't build safe UPDATEs against arbitrary SQL.
+    patchSqlTab(tabId, opts?.keepSource ? { text } : { text, source: undefined });
+  }, [patchSqlTab, tabId]);
+  const setSqlResult = useCallback((result: SqlResult | undefined) => {
+    patchSqlTab(tabId, { result });
+  }, [patchSqlTab, tabId]);
+
   const layout = useStore(s => s.layout);
   const setLayout = useStore(s => s.setLayout);
-  const sqlRunRequest = useStore(s => s.sqlRunRequest);
+  const sqlRunRequest = tab?.runNonce ?? 0;
   const showToast = useStore(s => s.showToast);
   const [running, setRunning] = useState(false);
   const [historyTick, setHistoryTick] = useState(0);
@@ -86,6 +103,38 @@ export function SqlWorkspace() {
   const [editText, setEditText] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveErrors, setSaveErrors] = useState<string[]>([]);
+
+  // Schema + driver feed the type-ahead hints in the query editor. Both are
+  // best-effort: with no connection, or a connection that won't introspect,
+  // the hints fall back to keywords and snippets only.
+  const [schema, setSchema] = useState<DbSchema[] | null>(null);
+  const [connDriver, setConnDriver] = useState<'mysql' | 'postgres'>('postgres');
+  const hintDriver = sqlSource?.driver ?? connDriver;
+
+  // Introspection is not free on a large database, so we only re-run it when
+  // the connection changes, or when a table we were handed isn't in the
+  // schema we hold — which is what a database switch looks like from here.
+  const schemaKey = useRef<string>('');
+  useEffect(() => {
+    if (!sqlConnId) { setSchema(null); schemaKey.current = ''; return; }
+    const known = !!schema?.some(s => s.tables.some(t => t.name === sqlSource?.table));
+    if (schemaKey.current === sqlConnId && (!sqlSource || known)) return;
+    schemaKey.current = sqlConnId;
+    let alive = true;
+    (async () => {
+      try {
+        const profiles = await window.opendev.db.list();
+        const p = profiles.find(x => x.id === sqlConnId);
+        if (alive && (p?.driver === 'mysql' || p?.driver === 'postgres')) setConnDriver(p.driver);
+      } catch { /* keep the default driver */ }
+      try {
+        const s = await window.opendev.db.schema(sqlConnId);
+        if (alive) setSchema(s);
+      } catch { if (alive) setSchema(null); }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sqlConnId, sqlSource?.schema, sqlSource?.table]);
 
   const run = async () => {
     if (!sqlConnId) { setSqlResult({ error: 'No connection selected — pick one in the right panel.' }); return; }
@@ -399,14 +448,12 @@ export function SqlWorkspace() {
       <Resizer orientation="horizontal" value={layout.sqlSplit} min={120} max={800}
         onChange={(v) => setLayout({ sqlSplit: v })} invert />
 
-      <textarea
-        className="sql-editor"
+      <SqlHintEditor
         value={sqlText}
-        spellCheck={false}
-        onChange={(e) => setSqlText(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); }
-        }}
+        onChange={setSqlText}
+        onRun={run}
+        driver={hintDriver}
+        schema={schema}
         placeholder={`-- write a SQL query, then ${modKey()}↵ to run`}
         style={{ height: layout.sqlSplit, flex: `0 0 ${layout.sqlSplit}px` }}
       />

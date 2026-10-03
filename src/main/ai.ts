@@ -4,12 +4,13 @@ import { promises as fs, existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
-import type { ChatAttachment, ChatMessage, Conversation } from '@shared/types';
+import type { AiActivityMsg, ChatAttachment, ChatMessage, Conversation } from '@shared/types';
 import { loadSettings } from './storage.js';
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
 import { LIMITS, tail } from './limits.js';
-import { resolveBinPath, spawnBin } from './platform.js';
+import { resolveBinPath, spawnBin, killTree, cliChildEnv } from './platform.js';
+import { onShutdown } from './lifecycle.js';
 import { isAbsolutePath } from '@shared/paths';
 
 // AI-response accumulator that caps the final assistant text. Once we
@@ -68,19 +69,90 @@ function convPath(id: string): string | null {
 // here because this is where the rest of main/ has always imported it from.
 export { resolveBinPath };
 
+// Stream chunks are coalesced per stream and flushed every AI_FLUSH_MS, the
+// way term.ts batches pty output. Providers emit a delta per token, and each
+// IPC message costs a structured-clone plus a React state update that
+// re-renders the chat, so unbatched a fast model drove the renderer at
+// hundreds of updates a second. A `done` message flushes what is pending
+// first, so ordering is unchanged.
+const AI_FLUSH_MS = 33;
+type AiStreamMsg = { streamId: string; chunk?: string; done: boolean; full?: string };
+const pendingChunks = new Map<string, { text: string; timer: NodeJS.Timeout }>();
+
+function flushAiStream(streamId: string): void {
+  const p = pendingChunks.get(streamId);
+  if (!p) return;
+  pendingChunks.delete(streamId);
+  clearTimeout(p.timer);
+  safeSend(IPC.AiStream, { streamId, chunk: p.text, done: false });
+}
+
+function sendAiStream(msg: AiStreamMsg): void {
+  if (!msg.done && msg.chunk) {
+    const p = pendingChunks.get(msg.streamId);
+    if (p) { p.text += msg.chunk; return; }
+    pendingChunks.set(msg.streamId, { text: msg.chunk, timer: setTimeout(() => flushAiStream(msg.streamId), AI_FLUSH_MS) });
+    return;
+  }
+  flushAiStream(msg.streamId);
+  safeSend(IPC.AiStream, msg);
+}
+
+// Activity log: what each tool call is acting on, on its own channel so the
+// chat text is untouched. The first key found wins, so file tools report the
+// path rather than, say, an Edit's replacement text.
+const TARGET_KEYS = ['file_path', 'notebook_path', 'path', 'command', 'pattern', 'url', 'query', 'description', 'prompt'];
+const TARGET_SNIFF = new RegExp(`"(${TARGET_KEYS.join('|')})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+
+function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  for (const k of TARGET_KEYS) {
+    const v = (input as Record<string, unknown>)[k];
+    if (typeof v === 'string' && v.trim()) return v.trim().replace(/\s+/g, ' ').slice(0, 200);
+  }
+  return undefined;
+}
+
+// Pull the target out of a tool's arguments while they're still streaming,
+// so a long Write shows its path before the whole file has been generated.
+function sniffToolTarget(partialJson: string): string | undefined {
+  const m = partialJson.match(TARGET_SNIFF);
+  if (!m) return undefined;
+  try { return toolTarget({ [m[1]]: JSON.parse(`"${m[2]}"`) }); } catch { return undefined; }
+}
+
+function sendAiActivity(msg: AiActivityMsg): void {
+  safeSend(IPC.AiActivity, msg);
+}
+
+// Summaries for the sidebar list, which polls this every few seconds. A full
+// conversation can be megabytes of tool output, so each file is parsed only
+// when its mtime/size changes, and the list ships without message bodies
+// (`messageCount` stands in; open a conversation to load it in full).
+const summaryCache = new Map<string, { mtimeMs: number; size: number; summary: Conversation }>();
+
 async function listConversations(): Promise<Conversation[]> {
   const dir = convDir();
   if (!dir) return [];
   try {
     const entries = await fs.readdir(dir);
     const out: Conversation[] = [];
+    const seen = new Set<string>();
     for (const e of entries) {
       if (!e.endsWith('.json')) continue;
+      const file = join(dir, e);
+      seen.add(file);
       try {
-        const c = JSON.parse(await fs.readFile(join(dir, e), 'utf8')) as Conversation;
-        out.push(c);
+        const st = await fs.stat(file);
+        const hit = summaryCache.get(file);
+        if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) { out.push(hit.summary); continue; }
+        const c = JSON.parse(await fs.readFile(file, 'utf8')) as Conversation;
+        const summary: Conversation = { ...c, messages: [], messageCount: c.messages?.length ?? 0 };
+        summaryCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, summary });
+        out.push(summary);
       } catch {}
     }
+    for (const k of summaryCache.keys()) if (!seen.has(k)) summaryCache.delete(k);
     out.sort((a, b) => b.updatedAt - a.updatedAt);
     return out;
   } catch { return []; }
@@ -247,6 +319,42 @@ You are running inside OpenDev IDE. A few IDE-specific conventions:
      if the user explicitly wants TypeScript (it requires \`tsx\` installed).
    - Bundle npm dependencies inside the agent folder; do not assume a later
      \`npm install\` step.
+
+5. GENERATING REST REQUESTS FROM THE CODEBASE
+   The IDE has a REST client (right-panel "REST" tab) that you drive through
+   the \`opendev-ide\` MCP tools. When the user asks you to find the API calls /
+   endpoints in the repo and "create REST calls", "make requests in the REST
+   tab", "build me a Postman-style collection", or similar:
+
+   a) Find every HTTP endpoint the code defines — controllers, route
+      decorators/annotations (@Get, @app.route, [HttpPost], router.get, …),
+      router files, OpenAPI/Swagger specs. Include the outbound APIs the code
+      calls only if the user asked for those too.
+   b) Work out the runnable base URL: ports and prefixes from config, .env
+      files, launchSettings.json, application.yml, global route prefixes.
+      \`ide_browser_tokens\` shows which API origins the signed-in app in the
+      browser panel actually talks to; \`ide_listening_ports\` shows what runs.
+   c) Build ONE request per endpoint + method, and save them all in a single
+      \`ide_rest_save_many\` call:
+      - folder = the resource / controller ("Users", "Orders", …)
+      - within a folder, order GET, POST, PUT, PATCH, DELETE
+      - name = short action ("List users", "Create user", "Delete user")
+      - description = what it does, path/query params, required body
+        fields, what it returns, and the source file it came from
+      - url = full URL with realistic example values in path params;
+        query params go in \`params\`
+      - body = a realistic example JSON built from the real DTO/model fields
+      - auth = {kind:"browser"} for anything behind authentication. That
+        borrows the bearer token from the IDE browser panel when the request
+        is sent; never ask the user to paste a token or hard-code one.
+   d) If \`ide_browser_tokens\` is empty and the endpoints need auth, tell the
+      user to open their app in the browser panel and sign in. The requests
+      pick the token up once they have.
+   e) Optionally prove one read-only request works with \`ide_rest_send\` (use
+      a GET — never fire POST/PUT/DELETE without the user saying so).
+   f) Finish with a short summary: folders and request counts, the base URL
+      you chose and why, and anything you couldn't resolve.
+   Re-running is safe: the same folder + method + URL path updates in place.
 </ide-instructions>`;
 
 function buildPrompt(messages: ChatMessage[], attachments: ChatAttachment[] | undefined, userText: string, ideCtx?: IdeContext, includeSystemInstructions?: boolean): string {
@@ -316,10 +424,10 @@ async function streamViaClaudeSdk(streamId: string, text: string, conv: Conversa
         acc.append(t);
         // Don't keep streaming chunks to the renderer past the cap either —
         // the renderer-side store has its own cap but no point making it work.
-        if (!acc.truncated()) safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
+        if (!acc.truncated()) sendAiStream( { streamId, chunk: t, done: false });
       }
     }
-    safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
+    sendAiStream( { streamId, done: true, full: acc.value() });
   } finally {
     activeStreams.delete(streamId);
   }
@@ -328,7 +436,7 @@ async function streamViaClaudeSdk(streamId: string, text: string, conv: Conversa
   await saveConversation(conv);
 }
 
-async function streamViaClaudeCli(streamId: string, text: string, conv: Conversation): Promise<void> {
+async function streamViaClaudeCli(streamId: string, text: string, conv: Conversation, opts: { model?: string; effort?: string } = {}): Promise<void> {
   const settings = await loadSettings();
   const configuredBin = settings.claudeCliPath || 'claude';
   // Resolve to an absolute path so a Finder-launched .app (minimal PATH) can
@@ -340,7 +448,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     const msg = `\n[claude cli not found]\n` +
       `Looked for '${configuredBin}' on PATH:\n  ${pathDisp}\n\n` +
       `Set Settings → AI CLI paths → Claude CLI path to an absolute path, e.g. ${process.env.HOME || '~'}/.local/bin/claude.\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    sendAiStream( { streamId, chunk: msg, done: true, full: msg });
     conv.messages.push({ id: randomUUID(), role: 'assistant', text: msg, createdAt: Date.now(), provider: 'claude' });
     trimConversation(conv);
     await saveConversation(conv);
@@ -361,6 +469,13 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
+    // Emit token-level deltas as they generate. Without this the CLI is
+    // SILENT for the entire time the model is producing a tool input — a
+    // 15 KB Write is minutes of zero stdout — and the idle watchdog below
+    // reads that as a hang and kills the run mid-write. That is the bug
+    // where the assistant announces "writing the files now" and nothing
+    // ever lands on disk.
+    '--include-partial-messages',
     // bypassPermissions = no per-tool approval prompts. The IDE chat is
     // already an opted-in surface, so we trust the model to write/edit
     // and surface the diff after.
@@ -368,29 +483,31 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     // Disallow the interactive question/permission tools — in headless
     // `-p` mode they have nowhere to surface and would hang the run.
     // The system prompt tells the model to ask via plain text instead.
-    '--disallowedTools', 'AskUserQuestion'
+    '--disallowedTools', 'AskUserQuestion',
+    // The IDE's own MCP server (REST tab, browser tokens, DB, services…), so
+    // the chat can drive the IDE and not just the files. Dynamic import: mcp.ts
+    // reaches agents.ts, which would close a static cycle back to here.
+    ...(await (await import('./mcp.js')).cliMcpConfigArgs())
   ];
   // If we already have a session id from a previous turn in this
   // conversation, resume it so the model keeps full context.
   if (conv.claudeSessionId) {
     args.push('--resume', conv.claudeSessionId);
   }
+  // Composer picks. Validated so a stray value can't become an extra flag;
+  // omitted entirely when unset so the CLI's own default applies. Safe to
+  // change mid-conversation — `--resume` accepts a different model/effort.
+  const model = opts.model?.trim();
+  if (model && /^[\w.\-\[\]]+$/.test(model)) args.push('--model', model);
+  const effort = opts.effort?.trim();
+  if (effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) args.push('--effort', effort);
   console.log(`[claude cli] spawn ${claudeBin} ${args.slice(0, 4).join(' ')}… in ${cwd} (prompt: ${text.length} chars)`);
-  // Filter Electron-specific env vars before handing to claude. Without this,
-  // a Finder-launched .app passes things like ELECTRON_RUN_AS_NODE and other
-  // packaging vars that can confuse child tools or leak Electron behavior
-  // into hook subshells. We keep everything else (PATH, HOME, locale,
-  // user-set API keys, etc.) so user customizations still apply.
-  const childEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v == null) continue;
-    if (k.startsWith('ELECTRON_')) continue;
-    if (k === 'NODE_OPTIONS') continue;
-    childEnv[k] = v;
-  }
   const proc = spawnBin(claudeBin, args, {
     cwd,
-    env: childEnv,
+    // See cliChildEnv: keeps PATH/HOME/locale/API keys, drops the Electron
+    // packaging vars and CLAUDE_CONFIG_DIR (which would point the CLI at
+    // another account's credential store).
+    env: cliChildEnv(),
     // Always pipe stdin so we can stream the prompt in — see the comment
     // on `args` above about why we don't pass it as a positional arg.
     stdio: ['pipe', 'pipe', 'pipe']
@@ -402,6 +519,16 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   let firstChunkAt: number | null = null;
   let stdoutBuf = '';
   let usedStreamJson = true;
+  // Set once token-level deltas start arriving, so the completed `assistant`
+  // events that follow aren't emitted a second time.
+  let sawPartial = false;
+  // Progress state for the tool_use block currently being generated.
+  let toolName: string | null = null;
+  let toolInputBytes = 0;
+  let toolDots = 0;
+  let toolId: string | null = null;
+  let toolJson = '';
+  let toolTargetSent = false;
   // Set when WE kill the subprocess, so the close handler can report an
   // accurate cause instead of generically blaming `claude login`.
   let killReason: 'response-cap' | 'idle-watchdog' | null = null;
@@ -415,13 +542,13 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
       const marker = `\n\n[response truncated — exceeded ${LIMITS.aiResponseBytes} bytes; killing CLI]\n`;
       acc = acc.slice(0, LIMITS.aiResponseBytes) + marker;
       accTruncated = true;
-      safeSend(IPC.AiStream, { streamId, chunk: marker, done: false });
+      sendAiStream( { streamId, chunk: marker, done: false });
       killReason = 'response-cap';
-      try { proc.kill('SIGTERM'); } catch {}
+      void killTree(proc.pid ?? 0, true);
       return;
     }
     acc += chunk;
-    safeSend(IPC.AiStream, { streamId, chunk, done: false });
+    sendAiStream( { streamId, chunk, done: false });
   };
 
   const handleEvent = (ev: any) => {
@@ -432,7 +559,69 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     //   { type: "result", subtype: "success", result: "...", ... }
     if (!ev || typeof ev !== 'object') return;
     const t = ev.type;
+    if (t === 'stream_event') {
+      // --include-partial-messages: raw Anthropic SSE events, one per token
+      // delta. Two jobs here. (1) Stream text as it generates instead of in
+      // whole-block bursts. (2) Keep stdout flowing while the model writes a
+      // large tool input, so the idle watchdog can tell "generating" from
+      // "hung" — `input_json_delta` carries no text worth showing, but
+      // arriving at all is the liveness signal we need.
+      const e = ev.event;
+      if (e?.type === 'content_block_start' && e.content_block?.type === 'tool_use' && e.content_block.name) {
+        sawPartial = true;
+        toolName = e.content_block.name;
+        toolInputBytes = 0;
+        toolDots = 0;
+        toolId = typeof e.content_block.id === 'string' ? e.content_block.id : null;
+        toolJson = '';
+        toolTargetSent = false;
+        if (toolId) sendAiActivity({ streamId, id: toolId, tool: toolName!, status: 'running' });
+        emit(`\n› using tool: ${toolName}`);
+      } else if (e?.type === 'content_block_delta') {
+        if (e.delta?.type === 'text_delta' && typeof e.delta.text === 'string') {
+          sawPartial = true;
+          emit(e.delta.text);
+        } else if (e.delta?.type === 'input_json_delta' && toolName) {
+          // The model is generating the tool's arguments. For a Write that is
+          // the entire file — a minute and a half of nothing on screen, which
+          // reads as a frozen app. One dot per 2 KB turns that dead air into
+          // visible progress; capped so a huge input can't spam the log.
+          const part = String(e.delta.partial_json ?? '');
+          toolInputBytes += part.length;
+          // Only the head is needed to find the target; don't buffer a whole file.
+          if (toolId && !toolTargetSent && toolJson.length < 8192) {
+            toolJson += part;
+            const target = sniffToolTarget(toolJson);
+            if (target) {
+              toolTargetSent = true;
+              sendAiActivity({ streamId, id: toolId, tool: toolName, target, status: 'running' });
+            }
+          }
+          const want = Math.min(Math.floor(toolInputBytes / 2048), 60);
+          if (want > toolDots) {
+            emit('·'.repeat(want - toolDots));
+            toolDots = want;
+          }
+        }
+      } else if (e?.type === 'content_block_stop' && toolName) {
+        emit(toolInputBytes > 2048 ? ` (${(toolInputBytes / 1024).toFixed(1)} KB)\n` : '\n');
+        toolName = null;
+        toolId = null;
+      }
+      return;
+    }
     if (t === 'assistant') {
+      // The assembled message carries each tool's full input — the reliable
+      // source for the target, with or without partial deltas.
+      for (const c of ev.message?.content || []) {
+        if (c?.type === 'tool_use' && typeof c.id === 'string' && c.name) {
+          sendAiActivity({ streamId, id: c.id, tool: c.name, target: toolTarget(c.input), status: 'running' });
+        }
+      }
+      // When partial deltas are flowing, this event is just the assembled
+      // copy of text we have already streamed — replaying it would double
+      // every response.
+      if (sawPartial) return;
       const content = ev.message?.content || [];
       for (const c of content) {
         if (c?.type === 'text' && typeof c.text === 'string') {
@@ -446,10 +635,22 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
       // so the user can see when a tool produced output.
       const content = ev.message?.content || [];
       for (const c of content) {
-        if (c?.type === 'tool_result' && typeof c.content === 'string') {
-          const preview = c.content.slice(0, 80).replace(/\n/g, ' ');
-          emit(`  ↳ ${preview}${c.content.length > 80 ? '…' : ''}\n`);
+        if (c?.type !== 'tool_result') continue;
+        if (typeof c.tool_use_id === 'string') {
+          sendAiActivity({ streamId, id: c.tool_use_id, tool: '', status: c.is_error ? 'error' : 'ok' });
         }
+        // Write/Edit/Read hand back an array of blocks, not a bare string —
+        // matching only on `typeof === 'string'` made exactly the file-editing
+        // tools the invisible ones.
+        const raw = typeof c.content === 'string'
+          ? c.content
+          : Array.isArray(c.content)
+            ? c.content.map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join(' ')
+            : '';
+        const flat = raw.trim().replace(/\s+/g, ' ');
+        if (!flat) continue;
+        const preview = flat.slice(0, 80);
+        emit(`  ↳ ${c.is_error ? '[error] ' : ''}${preview}${flat.length > 80 ? '…' : ''}\n`);
       }
     } else if (t === 'result') {
       if (typeof ev.result === 'string' && acc.length === 0) emit(ev.result);
@@ -467,14 +668,19 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
         conv.claudeSessionId = ev.session_id;
         if (wasNew) console.log(`[claude cli] captured session_id=${ev.session_id} for conv=${conv.id}`);
       }
+      // Tag the reply with the exact model version the CLI resolved to (the
+      // composer may say "default" or an alias), plus the effort we asked for.
+      if (ev.subtype === 'init' && typeof ev.model === 'string') {
+        emit(`_${ev.model}${effort ? ` · reasoning: ${effort}` : ''}_\n\n`);
+      }
     }
   };
 
   proc.on('error', (err) => {
     const msg = `\n[claude cli failed to spawn] ${err.message}\n` +
       `Binary: ${claudeBin}\n` +
-      `Make sure the file exists and is executable, and that you've run \`claude login\` at least once.\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+      `Make sure the file exists and is executable, and that Settings → AI → Claude account shows you signed in.\n`;
+    sendAiStream( { streamId, chunk: msg, done: false });
     console.error('[claude cli] spawn error', err.message);
   });
 
@@ -511,7 +717,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     // can otherwise grow without bound.
     stderr = tail(stderr + t, LIMITS.aiStderrTailBytes);
     console.error('[claude cli stderr]', t.trimEnd());
-    safeSend(IPC.AiStream, { streamId, chunk: `[stderr] ${t}`, done: false });
+    sendAiStream( { streamId, chunk: `[stderr] ${t}`, done: false });
   });
 
   if (proc.stdin) {
@@ -525,7 +731,7 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   const heartbeat = setInterval(() => {
     if (firstChunkAt == null) {
       waitedSec += 10;
-      safeSend(IPC.AiStream, {
+      sendAiStream( {
         streamId,
         chunk: `\n[still waiting on ${claudeBin} (${waitedSec}s)… Press Stop to cancel.]\n`,
         done: false
@@ -533,23 +739,31 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     }
   }, 10_000);
 
-  // Idle watchdog: if the subprocess produces no output for 60 seconds at
-  // ANY point (not just before the first chunk), it's almost certainly
-  // hung — kill it so the renderer flips `sending` back to false. Without
-  // this, a stuck tool call would trap the composer forever. 60s gives
-  // long tool calls room to run while bounding the worst-case wait.
-  const IDLE_KILL_MS = 60_000;
+  // Idle watchdog: if the subprocess produces no output for this long at ANY
+  // point, it's probably hung — kill it so the renderer flips `sending` back
+  // to false, instead of trapping the composer forever.
+  //
+  // This was 60s, which was far too aggressive and silently broke every long
+  // task. Silence is NOT evidence of a hang: with partial messages the model
+  // still goes quiet for the whole of a slow tool call (a test run, an
+  // install, a big grep), and the watchdog would SIGTERM the CLI mid-flight.
+  // Every run in a 2.5-hour session died 60-85s after its last output, always
+  // just as the model started writing a file — the user saw "writing the
+  // files now" and an empty working tree. 10 minutes is past any real tool
+  // call while still bounding a genuine hang.
+  const IDLE_KILL_MS = 10 * 60_000;
   const idleWatchdog = setInterval(() => {
     if (Date.now() - lastChunkAt > IDLE_KILL_MS) {
       console.warn(`[claude cli] idle for ${IDLE_KILL_MS}ms — killing subprocess`);
-      safeSend(IPC.AiStream, {
+      sendAiStream( {
         streamId,
         chunk: `\n[no output for ${Math.round(IDLE_KILL_MS / 1000)}s — killing subprocess so you can try again]\n`,
         done: false
       });
       killReason = 'idle-watchdog';
-      try { proc.kill('SIGTERM'); } catch {}
-      // close handler will fire and resolve the outer promise
+      // Whole tree: claude's own Bash tool calls are grandchildren, and they
+      // keep the stdio pipes (and the run) alive if only the parent is killed.
+      void killTree(proc.pid ?? 0, true);
     }
   }, 15_000);
   // Stamp lastChunkAt on any stream activity so the watchdog only fires
@@ -558,7 +772,16 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
   proc.stderr?.on('data', () => { lastChunkAt = Date.now(); });
 
   await new Promise<void>((resolve) => {
-    proc.on('close', (code, signal) => {
+    // 'close' waits for the process to exit AND every stdio pipe to close.
+    // A Bash tool call leaves grandchildren (npm, tsc, next build) holding
+    // inherited copies of those pipes, so killing claude.exe alone can leave
+    // 'close' pending forever: the turn is never saved and the composer stays
+    // stuck on "sending". 'exit' fires on process death regardless, so it
+    // arms a short grace period for the last output to drain, then finalizes.
+    let settled = false;
+    const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
       clearInterval(heartbeat);
       clearInterval(idleWatchdog);
       // Drain any trailing partial line as plain text
@@ -571,29 +794,43 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
       // Bun-compiled binaries (like claude) translate SIGTERM into exit code
       // 143, so signal is null but code reveals the kill.
       const wasKilled = signal != null || code === 143;
+      // A run that died after producing some text used to be saved as though
+      // it had finished normally: the reply just stopped mid-sentence with no
+      // hint that the CLI was killed, so a half-done task looked like a lazy
+      // model. Anything abnormal now leaves a visible mark on the transcript.
+      if (acc.length > 0 && (code !== 0 || signal) && killReason !== 'response-cap') {
+        const note = `\n\n[run did not finish — claude exited code=${code} signal=${signal ?? 'none'}` +
+          `${killReason ? ` kill=${killReason}` : ''}. Work in progress at that moment was NOT completed.]\n`;
+        emit(note);
+      }
       if (acc.length === 0 && (code !== 0 || signal)) {
         let cause: string;
         if (killReason === 'idle-watchdog') {
-          cause = `claude produced no output for 60s; the IDE killed it. The CLI may be hanging on auth or a slow tool call.\n` +
+          cause = `claude produced no output for ${Math.round(IDLE_KILL_MS / 1000)}s; the IDE killed it. The CLI may be hanging on auth or a slow tool call.\n` +
             `Try \`${claudeBin} -p "hello"\` in Terminal to confirm the CLI is working.`;
         } else if (killReason === 'response-cap') {
           cause = `Response exceeded the ${LIMITS.aiResponseBytes}-byte cap and was truncated.`;
         } else if (wasKilled) {
           cause = `claude was killed externally (Stop button, IDE quitting, or OS). The IDE didn't initiate this kill — if you didn't press Stop, check Console.app for the parent app being terminated.`;
         } else {
-          cause = `claude exited on its own with code=${code}. Try \`${claudeBin} -p "hello"\` in Terminal — if that errors, the CLI isn't configured (run \`claude login\`).`;
+          cause = `claude exited on its own with code=${code}. Try \`${claudeBin} -p "hello"\` in Terminal — if that errors, the CLI isn't configured: sign in at Settings → AI → Claude account.`;
         }
         const msg = `\n[claude cli error: exit code=${code} signal=${signal ?? 'none'}${killReason ? ` kill=${killReason}` : ''}]\n` +
           `Binary: ${claudeBin}\n` +
           (stderr ? `stderr:\n${stderr}\n` : '') +
           cause + '\n';
-        safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+        sendAiStream( { streamId, chunk: msg, done: false });
         acc = msg;
       }
       resolve();
-    });
+    };
+    proc.on('close', (code, signal) => finalize(code, signal));
+    // Grace period so a normal exit still finalizes via 'close' (with all
+    // output drained); only a pipe held open by a surviving grandchild falls
+    // through to this path.
+    proc.on('exit', (code, signal) => { setTimeout(() => finalize(code, signal), 3000); });
   });
-  safeSend(IPC.AiStream, { streamId, done: true, full: acc });
+  sendAiStream( { streamId, done: true, full: acc });
   activeStreams.delete(streamId);
   conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc, createdAt: Date.now(), provider: 'claude' });
   trimConversation(conv);
@@ -641,10 +878,10 @@ async function streamViaOpenAiSdk(streamId: string, text: string, conv: Conversa
       const t = chunk.choices?.[0]?.delta?.content;
       if (typeof t === 'string' && t.length) {
         acc.append(t);
-        if (!acc.truncated()) safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
+        if (!acc.truncated()) sendAiStream( { streamId, chunk: t, done: false });
       }
     }
-    safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
+    sendAiStream( { streamId, done: true, full: acc.value() });
   } finally {
     activeStreams.delete(streamId);
   }
@@ -666,7 +903,7 @@ async function streamViaCodexCli(streamId: string, text: string, conv: Conversat
   // stdout straight to the chat and keep stderr only for diagnostics.
   const proc = spawnBin(codexBin, ['exec', '--skip-git-repo-check', text], {
     cwd,
-    env: process.env,
+    env: cliChildEnv(),
     stdio: ['ignore', 'pipe', 'pipe']
   });
   activeStreams.set(streamId, proc);
@@ -679,14 +916,14 @@ async function streamViaCodexCli(streamId: string, text: string, conv: Conversat
       try { proc.kill('SIGTERM'); } catch {}
       return;
     }
-    safeSend(IPC.AiStream, { streamId, chunk, done: false });
+    sendAiStream( { streamId, chunk, done: false });
   };
 
   proc.on('error', (err) => {
     const msg = `\n[codex cli failed to spawn] ${err.message}\n` +
       `Binary: ${codexBin}\n` +
       `Make sure the file exists and is executable, and that you've signed in to codex.\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+    sendAiStream( { streamId, chunk: msg, done: false });
     console.error('[codex cli] spawn error', err.message);
   });
 
@@ -706,13 +943,13 @@ async function streamViaCodexCli(streamId: string, text: string, conv: Conversat
           (stderrBuf ? `stderr:\n${stderrBuf}\n` : '') +
           `Try in Terminal: \`${codexBin} exec --skip-git-repo-check "hello"\`. ` +
           `If that errors, the CLI isn't configured — run codex's login flow first.\n`;
-        safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+        sendAiStream( { streamId, chunk: msg, done: false });
         acc.append(msg);
       }
       resolve();
     });
   });
-  safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
+  sendAiStream( { streamId, done: true, full: acc.value() });
   activeStreams.delete(streamId);
   conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'codex' });
   trimConversation(conv);
@@ -727,7 +964,7 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   const settings = await loadSettings();
   if (!settings.aiLocalEnabled) {
     const msg = '\n[opencode] Local AI is not enabled — turn it on in Settings → Local AI.\n';
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    sendAiStream( { streamId, chunk: msg, done: true, full: msg });
     return;
   }
   const configured = (settings.aiLocalBinPath || 'opencode').trim() || 'opencode';
@@ -741,14 +978,14 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   if (isAbsolutePath(configured) && !existsSync(configured)) {
     const msg = `\n[opencode] No file at "${configured}".\n` +
       `Update Settings → Local AI → OpenCode binary. Either click Browse… to pick the actual binary, or paste the full path (e.g. ~/Desktop/repo/OpenCode/target/release/opencode).\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    sendAiStream( { streamId, chunk: msg, done: true, full: msg });
     return;
   }
   if (!isAbsolutePath(configured) && !resolveBinPath(configured)) {
     const msg = `\n[opencode] Binary "${configured}" not found on PATH.\n` +
       `PATH searched: ${process.env.PATH}\n` +
       `Either put opencode on your PATH or set an absolute path in Settings → Local AI → OpenCode binary (Browse…).\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: true, full: msg });
+    sendAiStream( { streamId, chunk: msg, done: true, full: msg });
     return;
   }
 
@@ -773,10 +1010,10 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   // during the multi-second indexing pass, which read as "broken".
   const displayArgs = args.slice(0, -1).join(' ');
   const startBanner = `\n_Running: ${bin} ${displayArgs} "<your question>"_\n_cwd: ${cwd}_\n`;
-  safeSend(IPC.AiStream, { streamId, chunk: startBanner, done: false });
+  sendAiStream( { streamId, chunk: startBanner, done: false });
 
   console.log(`[opencode] spawn ${bin} ${displayArgs} <question> in ${cwd} (q=${text.length} chars)`);
-  const proc = spawnBin(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawnBin(bin, args, { cwd, env: cliChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   activeStreams.set(streamId, proc);
   const startedAt = Date.now();
   const acc = makeResponseAcc();
@@ -790,7 +1027,7 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   const heartbeat = setInterval(() => {
     if (gotStdout) return;
     const secs = Math.round((Date.now() - startedAt) / 1000);
-    safeSend(IPC.AiStream, { streamId, chunk: `\n_…still waiting on first stdout from opencode (${secs}s elapsed)_\n`, done: false });
+    sendAiStream( { streamId, chunk: `\n_…still waiting on first stdout from opencode (${secs}s elapsed)_\n`, done: false });
   }, 15_000);
 
   proc.on('error', (err) => {
@@ -802,7 +1039,7 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
         ? `Permission denied executing "${bin}". Run \`chmod +x "${bin}"\` and try again.`
         : `Update Settings → Local AI → OpenCode binary if the path is wrong.`;
     const msg = `\n[opencode failed to spawn] ${err.message}\n${hint}\n`;
-    safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+    sendAiStream( { streamId, chunk: msg, done: false });
     acc.append(msg);
     console.error('[opencode] spawn error', err.message);
   });
@@ -812,11 +1049,11 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
     if (!gotStdout) {
       gotStdout = true;
       const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-      safeSend(IPC.AiStream, { streamId, chunk: `\n_first stdout chunk after ${secs}s_\n\n`, done: false });
+      sendAiStream( { streamId, chunk: `\n_first stdout chunk after ${secs}s_\n\n`, done: false });
     }
     acc.append(t);
     if (acc.truncated()) { try { proc.kill('SIGTERM'); } catch {} return; }
-    safeSend(IPC.AiStream, { streamId, chunk: t, done: false });
+    sendAiStream( { streamId, chunk: t, done: false });
   });
 
   // OpenCode emits progress to stderr — "indexing /path...", "indexed N
@@ -835,7 +1072,7 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
       const line = stderrLineBuf.slice(0, nl).trim();
       stderrLineBuf = stderrLineBuf.slice(nl + 1);
       if (!line) continue;
-      safeSend(IPC.AiStream, { streamId, chunk: `\n_${line}_\n`, done: false });
+      sendAiStream( { streamId, chunk: `\n_${line}_\n`, done: false });
     }
   });
 
@@ -867,13 +1104,13 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
           `  • Model "${settings.aiLocalModel || '(unset)'}" not pulled on the host (run \`ollama pull ${settings.aiLocalModel || '<model>'}\` there)\n` +
           `  • Wrong binary path in Settings → Local AI\n` +
           `Try in Terminal: \`${bin} ask --base-url ${settings.aiLocalBaseUrl || 'http://localhost:11434/v1'} --model ${settings.aiLocalModel || '<model>'} "hello"\` to see the real error.\n`;
-        safeSend(IPC.AiStream, { streamId, chunk: msg, done: false });
+        sendAiStream( { streamId, chunk: msg, done: false });
         acc.append(msg);
       }
       resolve();
     });
   });
-  safeSend(IPC.AiStream, { streamId, done: true, full: acc.value() });
+  sendAiStream( { streamId, done: true, full: acc.value() });
   activeStreams.delete(streamId);
   conv.messages.push({ id: randomUUID(), role: 'assistant', text: acc.value(), createdAt: Date.now(), provider: 'opencode' });
   trimConversation(conv);
@@ -889,12 +1126,29 @@ export function registerAiIpc() {
     return true;
   });
 
+  ipcMain.handle(IPC.AiConversationRename, async (_e, id: string, title: string) => {
+    const c = await loadConversation(id);
+    const p = convPath(id);
+    if (!c || !p) return false;
+    const clean = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!clean) return false;
+    c.title = clean;
+    // Deliberately NOT saveConversation(): that stamps updatedAt, and a
+    // rename would then shuffle the conversation to the top of the history
+    // list as though it had just been used.
+    await fs.mkdir(join(p, '..'), { recursive: true });
+    await fs.writeFile(p, JSON.stringify(c, null, 2), 'utf8');
+    return true;
+  });
+
   ipcMain.handle(IPC.AiSend, async (_e, args: {
     conversationId?: string;
     text: string;
     attachments?: ChatAttachment[];
     transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli';
     context?: IdeContext;
+    model?: string;
+    effort?: string;
   }) => {
     let conv: Conversation | null = null;
     if (args.conversationId) {
@@ -934,14 +1188,14 @@ export function registerAiIpc() {
     const isFirstTurn = !conv.claudeSessionId;
     const prompt = buildPrompt(conv.messages.slice(0, -1), args.attachments, args.text, args.context, isFirstTurn);
     const run = (() => {
-      if (transport === 'claude-cli') return () => streamViaClaudeCli(streamId, prompt, conv);
+      if (transport === 'claude-cli') return () => streamViaClaudeCli(streamId, prompt, conv, { model: args.model, effort: args.effort });
       if (transport === 'openai-sdk') return () => streamViaOpenAiSdk(streamId, prompt, conv, args.attachments);
       if (transport === 'codex-cli') return () => streamViaCodexCli(streamId, prompt, conv);
       if (transport === 'opencode-cli') return () => streamViaOpenCodeCli(streamId, args.text, conv);
       return () => streamViaClaudeSdk(streamId, prompt, conv, args.attachments);
     })();
     run().catch((err) => {
-      safeSend(IPC.AiStream, {
+      sendAiStream( {
         streamId,
         chunk: `\n[error] ${err.message}\n`,
         done: true,
@@ -955,8 +1209,28 @@ export function registerAiIpc() {
     const s = activeStreams.get(streamId);
     if (!s) return false;
     if ('abort' in s) (s as AbortController).abort();
-    else (s as ChildProcess).kill();
+    // Stop has to take the whole tree. `kill()` reaches only the CLI itself,
+    // leaving whatever it had spawned (a build, a test run) still running and
+    // still holding the stdio pipes — so the run kept going invisibly and the
+    // turn was never saved.
+    else void killTree((s as ChildProcess).pid ?? 0, true);
     activeStreams.delete(streamId);
     return true;
   });
 }
+
+// Quitting has to take the CLI children with it. They are plain spawned
+// processes — not job-object children on Windows, not in the app's process
+// group on macOS — so nothing reaps them when the main process exits, and an
+// in-flight `claude` outlived the IDE and sat in Task Manager as an orphan.
+// Cancel already does this for one stream; this does it for whatever is still
+// running at quit. Killed in parallel because before-quit caps shutdown at 6s
+// and each taskkill can take a second or more.
+onShutdown(async () => {
+  const streams = [...activeStreams.values()];
+  activeStreams.clear();
+  await Promise.all(streams.map(async (s) => {
+    if ('abort' in s) { try { (s as AbortController).abort(); } catch {} return; }
+    await killTree((s as ChildProcess).pid ?? 0, true);
+  }));
+});

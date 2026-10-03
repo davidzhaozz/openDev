@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron';
+import { ipcMain, dialog, shell, app, BrowserWindow, Menu } from 'electron';
 import { IPC } from '@shared/ipc';
 import { workspace } from './workspace.js';
 import { loadSettings, patchSettings } from './storage.js';
@@ -8,11 +8,13 @@ import { registerLspIpc } from './lsp.js';
 import { registerAiIpc } from './ai.js';
 import { registerServicesIpc } from './services.js';
 import { registerTasksIpc } from './tasks.js';
+import { registerJiraIpc } from './jira.js';
 import { registerPortsIpc } from './ports.js';
 import { registerDbIpc } from './db.js';
 import { registerGitIpc } from './git.js';
 import { registerTerminalIpc } from './term.js';
 import { registerBrowserIpc } from './browser.js';
+import { registerPasswordsIpc } from './passwords.js';
 import { startIdeMcpServer, registerMcpIpc } from './mcp.js';
 import { registerSessionIpc } from './session.js';
 import { registerToolsIpc } from './tools.js';
@@ -24,11 +26,14 @@ import { registerPackagesIpc } from './packages.js';
 import { registerHistoryIpc } from './queryHistory.js';
 import { registerRestIpc } from './rest.js';
 import { registerAiLocalIpc } from './aiLocal.js';
+import { registerClaudeAuthIpc } from './claudeAuth.js';
 import { registerMlxIpc } from './mlx.js';
 import { registerPythonIpc } from './python.js';
 import { registerRunConfigsIpc } from './runConfigs.js';
 import { registerPipIpc } from './pip.js';
 import { registerLocalModelsIpc } from './localModels.js';
+import { registerRecorderIpc } from './recorder.js';
+import { registerNetworkIpc } from './netlog.js';
 import { ipcMain as electronIpc } from 'electron';
 
 export function registerIpc() {
@@ -83,11 +88,13 @@ export function registerIpc() {
   registerAiIpc();
   registerServicesIpc();
   registerTasksIpc();
+  registerJiraIpc();
   registerPortsIpc();
   registerDbIpc();
   registerGitIpc();
   registerTerminalIpc();
   registerBrowserIpc();
+  registerPasswordsIpc();
   registerSessionIpc();
   registerToolsIpc();
   registerAgentsIpc();
@@ -98,11 +105,14 @@ export function registerIpc() {
   registerHistoryIpc();
   registerRestIpc();
   registerAiLocalIpc();
+  registerClaudeAuthIpc();
   registerMlxIpc();
   registerPythonIpc();
   registerRunConfigsIpc();
   registerPipIpc();
   registerLocalModelsIpc();
+  registerRecorderIpc();
+  registerNetworkIpc();
 
   // Gate the MCP HTTP server on the user's opt-in setting. Default true
   // for backward compat; users who toggle it off in Settings get the
@@ -123,13 +133,13 @@ export function registerIpc() {
 
   // Popout window for a single file (tab tear-off). Wiring lives here so the
   // main entry can stay focused on lifecycle.
-  electronIpc.handle(IPC.WindowPopoutFile, async (_e, path: string) => {
+  electronIpc.handle(IPC.WindowPopoutFile, async (_e, path: string, placement?: { atCursor?: boolean }) => {
     const { createPopoutWindow } = await import('./windows.js');
-    createPopoutWindow(path);
+    createPopoutWindow(path, placement || {});
     return true;
   });
 
-  electronIpc.handle(IPC.WindowPopoutAi, async (_e, opts: { conversationId?: string; name?: string; initialPrompt?: string } = {}) => {
+  electronIpc.handle(IPC.WindowPopoutAi, async (_e, opts: { conversationId?: string; name?: string; initialPrompt?: string; atCursor?: boolean } = {}) => {
     const { createPopoutAiWindow } = await import('./windows.js');
     createPopoutAiWindow(opts);
     return true;
@@ -146,4 +156,31 @@ export function registerIpc() {
     return win.isMaximized();
   });
   electronIpc.handle(IPC.WindowClose, (e) => { senderWindow(e)?.close(); return true; });
+  // Windows' native caption buttons are painted by the OS over our titlebar;
+  // keep their background and glyphs in step with the active theme.
+  electronIpc.handle(IPC.WindowSetOverlayColors, (e, color: string, symbolColor: string) => {
+    const win = senderWindow(e);
+    if (process.platform !== 'win32' || !win) return false;
+    try { win.setTitleBarOverlay({ color, symbolColor }); return true; } catch { return false; }
+  });
+
+  // Application-menu bridge for the frameless chrome. The renderer draws the
+  // bar; the items it pops are the real Menu objects built in index.ts, so
+  // labels, accelerators, enablement and click handlers stay in one place.
+  electronIpc.handle(IPC.MenuTopLevel, () => {
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return [];
+    return menu.items
+      .map((item, index) => ({ index, label: item.label, enabled: item.enabled }))
+      .filter((i) => i.label);
+  });
+  electronIpc.handle(IPC.MenuPopup, (e, index: number, x: number, y: number) => {
+    const menu = Menu.getApplicationMenu();
+    const item = menu?.items[index];
+    const win = senderWindow(e);
+    if (!item?.submenu || !win) return false;
+    // Round: Electron rejects fractional coordinates from getBoundingClientRect.
+    item.submenu.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+    return true;
+  });
 }

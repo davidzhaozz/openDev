@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ListeningPort } from '../../../shared/types';
 import { useStore } from '../state/store';
+import { useVisiblePoll } from '../usePoll';
 
 export function PortsPanel({ onOpen }: { onOpen: (url: string) => void }) {
   const [ports, setPorts] = useState<ListeningPort[]>([]);
@@ -8,7 +9,9 @@ export function PortsPanel({ onOpen }: { onOpen: (url: string) => void }) {
   const showToast = useStore(s => s.showToast);
 
   const refresh = async () => setPorts(await window.opendev.ports.list());
-  useEffect(() => { refresh(); const t = setInterval(refresh, 4000); return () => clearInterval(t); }, []);
+  // A tick here costs a netstat *and* a tasklist in main — never spend that on
+  // a window that is minimized or occluded.
+  useVisiblePoll(refresh, 4000);
 
   const free = async (port: number, command: string) => {
     if (!confirm(`Kill the process listening on port ${port} (${command})?`)) return;

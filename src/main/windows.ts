@@ -1,97 +1,94 @@
-import { BrowserWindow, app } from 'electron';
+import { BrowserWindow, app, screen, shell } from 'electron';
 import { join } from 'path';
-import { IPC } from '@shared/ipc';
-
-// Mirrors the main window: traffic lights on macOS, frameless everywhere else
-// (see windowChromeOptions in index.ts for why a native overlay isn't used).
-function chrome(): Electron.BrowserWindowConstructorOptions {
-  if (process.platform === 'darwin') {
-    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 } };
-  }
-  return { frame: false };
-}
-
-function wireMaximizeEvents(win: BrowserWindow): void {
-  const send = () => win.webContents.send(IPC.WindowMaximizedChanged, win.isMaximized());
-  win.on('maximize', send);
-  win.on('unmaximize', send);
-}
 import { baseName } from '@shared/paths';
+import { windowChromeOptions, wireMaximizeEvents, savedBounds, rememberBounds, showWhenReady } from './windowChrome.js';
 
-export function createPopoutWindow(path: string) {
+// Pop-outs never host an embedded browser, so they skip `webviewTag` — each
+// window that enables it pays for the guest-view machinery up front.
+function popoutWebPreferences(): Electron.WebPreferences {
   // Use app.getAppPath() (the path to the asar bundle in packaged builds,
   // the project root in dev) so path resolution doesn't depend on where
   // this file ends up after bundling (e.g. it gets split into a chunks/
   // subdirectory, which broke __dirname-based resolution).
-  const appRoot = app.getAppPath();
-  const preloadPath = join(appRoot, 'out', 'preload', 'index.mjs');
-  const rendererHtml = join(appRoot, 'out', 'renderer', 'index.html');
-
-  const win = new BrowserWindow({
-    width: 1000,
-    height: 720,
-    minWidth: 480,
-    minHeight: 320,
-    show: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
-    title: baseName(path) || 'OpenDev IDE',
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-      webviewTag: true
-    }
-  });
-  win.on('ready-to-show', () => win.show());
-  wireMaximizeEvents(win);
-  const devUrl = process.env['ELECTRON_RENDERER_URL'];
-  const q = `popout=1&path=${encodeURIComponent(path)}`;
-  if (devUrl) {
-    win.loadURL(`${devUrl}?${q}`);
-  } else {
-    win.loadFile(rendererHtml, { search: q });
-  }
+  return {
+    preload: join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: false,
+    spellcheck: false
+  };
 }
 
-export function createPopoutAiWindow(opts: { conversationId?: string; name?: string; initialPrompt?: string } = {}) {
-  const appRoot = app.getAppPath();
-  const preloadPath = join(appRoot, 'out', 'preload', 'index.mjs');
-  const rendererHtml = join(appRoot, 'out', 'renderer', 'index.html');
-
-  const win = new BrowserWindow({
-    width: 880,
-    height: 760,
-    minWidth: 420,
-    minHeight: 360,
-    show: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    ...chrome(),
-    title: opts.name || 'AI Chat',
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-      webviewTag: true
-    }
-  });
-  win.on('ready-to-show', () => win.show());
-  wireMaximizeEvents(win);
+function load(win: BrowserWindow, params: URLSearchParams): void {
   const devUrl = process.env['ELECTRON_RENDERER_URL'];
+  const q = params.toString();
+  if (devUrl) win.loadURL(`${devUrl}?${q}`);
+  else win.loadFile(join(app.getAppPath(), 'out', 'renderer', 'index.html'), { search: q });
+}
+
+export type PopoutPlacement = { atCursor?: boolean };
+
+/**
+ * Bounds for a new pop-out: the remembered size, and either the remembered
+ * position or — for a tab torn off by dragging — wherever the drop happened,
+ * with the cursor over the window's title bar the way a browser tab tears
+ * off. Clamped to the display under the cursor.
+ */
+function popoutBounds(key: string, width: number, height: number, placement: PopoutPlacement) {
+  const saved = savedBounds(key, width, height);
+  if (!placement.atCursor) return saved;
+  const p = screen.getCursorScreenPoint();
+  const area = screen.getDisplayNearestPoint(p).workArea;
+  const w = Math.min(saved.width, area.width);
+  const h = Math.min(saved.height, area.height);
+  const x = Math.min(Math.max(p.x - Math.round(w / 3), area.x), area.x + area.width - w);
+  const y = Math.min(Math.max(p.y - 12, area.y), area.y + area.height - h);
+  return { x, y, width: w, height: h };
+}
+
+function createPopout(key: string, size: { width: number; height: number; minWidth: number; minHeight: number }, title: string, params: URLSearchParams, placement: PopoutPlacement = {}): BrowserWindow {
+  const win = new BrowserWindow({
+    ...popoutBounds(key, size.width, size.height, placement),
+    minWidth: size.minWidth,
+    minHeight: size.minHeight,
+    show: false,
+    ...windowChromeOptions('popout'),
+    title,
+    webPreferences: popoutWebPreferences()
+  });
+  // The native frame would otherwise carry the app menu bar (File/Edit/…)
+  // on Windows; a pop-out has no use for it.
+  win.removeMenu();
+  // Links in pop-out content (e.g. an AI chat answer) go to the system
+  // browser, same as the main window, instead of spawning a bare window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  showWhenReady(win);
+  wireMaximizeEvents(win);
+  rememberBounds(win, key);
+  load(win, params);
+  return win;
+}
+
+export function createPopoutWindow(path: string, placement: PopoutPlacement = {}) {
+  createPopout(
+    'popout-file',
+    { width: 1000, height: 720, minWidth: 360, minHeight: 240 },
+    baseName(path) || 'OpenDev IDE',
+    new URLSearchParams({ popout: '1', path }),
+    placement
+  );
+}
+
+export function createPopoutAiWindow(opts: { conversationId?: string; name?: string; initialPrompt?: string } & PopoutPlacement = {}) {
   const params = new URLSearchParams();
   params.set('popout', 'ai');
   if (opts.conversationId) params.set('convId', opts.conversationId);
   if (opts.name) params.set('name', opts.name);
   if (opts.initialPrompt) params.set('prompt', opts.initialPrompt);
-  const q = params.toString();
-  if (devUrl) {
-    win.loadURL(`${devUrl}?${q}`);
-  } else {
-    win.loadFile(rendererHtml, { search: q });
-  }
+  // Small minimum on purpose: a chat docked beside the editor as a narrow
+  // strip is a normal way to use it.
+  createPopout('popout-ai', { width: 880, height: 760, minWidth: 320, minHeight: 240 }, opts.name || 'AI Chat', params, { atCursor: opts.atCursor });
 }

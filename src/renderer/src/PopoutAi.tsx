@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { AIChat } from './panels/AIChat';
 import { applyAppearanceSettings } from './components/Settings';
 import './styles/global.css';
-import { WindowControls, usesFramelessChrome } from './components/WindowControls';
+import { WindowControls, drawsWindowControls, hasNativeTitleBar } from './components/WindowControls';
 
 type Props = {
   conversationId?: string;
@@ -34,12 +34,18 @@ export function PopoutAi({ conversationId, initialName, initialPrompt }: Props) 
   // popout has no center-tab system, but the component still wants a key.
   const [tabId] = useState(() => `popout-ai-${Math.random().toString(36).slice(2, 10)}`);
 
+  // On Windows the native title bar already shows the conversation title
+  // (document.title), so a second bar would only eat vertical space.
+  const ownTitlebar = !hasNativeTitleBar();
+
   return (
-    <div className="app" style={{ gridTemplateRows: '32px 1fr', height: '100vh' }}>
-      <div className="titlebar">
-        <span className="title">🤖 {title}</span>
-        {usesFramelessChrome() && <WindowControls />}
-      </div>
+    <div className="app" style={{ gridTemplateRows: ownTitlebar ? '32px 1fr' : '1fr', height: '100vh' }}>
+      {ownTitlebar && (
+        <div className="titlebar">
+          <span className="title">🤖 {title}</span>
+          {drawsWindowControls() && <WindowControls />}
+        </div>
+      )}
       <div style={{ background: 'var(--bg-0)', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <AIChat
           tabId={tabId}

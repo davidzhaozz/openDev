@@ -3,6 +3,7 @@ import { execFile } from 'child_process';
 import { readdirSync } from 'fs';
 import { IPC } from '@shared/ipc';
 import type { SystemStats } from '@shared/types';
+import { BrowserWindow } from 'electron';
 import { safeSend } from './safeSend.js';
 
 // Whole-system memory + CPU sampler. Broadcast to the renderer every ~2s
@@ -151,7 +152,19 @@ function refreshDarwinUsedBytes(): void {
   });
 }
 
+// Nobody can see the chip while every window is minimized or hidden, so skip
+// the sample (and the renderer re-render it triggers). The first tick after a
+// window comes back reports a CPU delta spanning the gap, which is still a
+// true average.
+function anyWindowVisible(): boolean {
+  // The headless test server's shimmed windows have no visibility API;
+  // treat them as always visible.
+  return BrowserWindow.getAllWindows().some((w) =>
+    !w.isDestroyed() && (typeof w.isVisible !== 'function' || (w.isVisible() && !w.isMinimized())));
+}
+
 function tick(): void {
+  if (!anyWindowVisible()) return;
   try {
     const memTotal = totalmem();
     // On macOS, fire vm_stat for the next tick (async — uses last result for

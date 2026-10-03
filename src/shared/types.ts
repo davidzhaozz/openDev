@@ -33,6 +33,8 @@ export type Diagnostic = {
 };
 
 export type GrepHit = {
+  /** Generation of the search that produced it; lets a stale stream be dropped. */
+  token?: string;
   path: string;
   line: number;
   col: number;
@@ -66,6 +68,8 @@ export type Conversation = {
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
+  // Set only on list summaries, whose `messages` is left empty.
+  messageCount?: number;
   workspaceRoot?: string;
   // Claude Code CLI session id captured from the first stream-json `init`
   // event. Reusing it on subsequent turns via `--resume <id>` lets the AI
@@ -108,6 +112,56 @@ export type TaskItem = {
   done: boolean;
   notes?: string;
   createdAt: number;
+};
+
+/* ------------------------------------------------------------------- jira */
+
+/** Lifecycle of the AI run attached to a ticket. */
+export type JiraRunState = 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+
+/** The fields we pull from Atlassian. `description` is flattened out of ADF. */
+export type JiraIssueRef = {
+  key: string;              // BYZ-89
+  title: string;            // Jira `summary`
+  status?: string;          // Jira status name, e.g. "In Progress"
+  issueType?: string;
+  priority?: string;
+  assignee?: string;
+  url?: string;             // browse link
+  description?: string;     // plain text, fed to the model
+  fetchedAt?: number;
+};
+
+/** A ticket parked in the JIRA panel, plus the state of its AI run. */
+export type JiraTask = JiraIssueRef & {
+  id: string;
+  addedAt: number;
+  state: JiraRunState;
+  startedAt?: number;
+  endedAt?: number;
+  exitCode?: number | null;
+  /** Last meaningful line of run output — the "↳ writing X" line in the UI. */
+  lastLine?: string;
+  /** Set once we've posted the completion comment, so a rerun doesn't double-post. */
+  reportedAt?: number;
+  reportError?: string;
+};
+
+/**
+ * One ticket board — a `jira*.json` file in `.opendev` the panel can load.
+ * A workspace usually has several, one per parent ticket.
+ */
+export type JiraBoard = {
+  file: string;    // "jira-accounting-byz89.json"
+  label: string;   // "accounting-byz89", or "jira" for the default board
+  count: number;   // tickets parked in it
+  active: boolean; // the board the panel is currently working in
+};
+
+/** What the model is asked to produce, and what gets posted back to Jira. */
+export type JiraReport = {
+  summary: string;
+  testing: string;
 };
 
 export type DbDriver = 'mysql' | 'postgres' | 'elasticsearch';
@@ -199,6 +253,10 @@ export type AppSettings = {
   // chat composer dropdown. Restored when a fresh chat tab opens so we
   // don't keep snapping back to Claude after each session restart.
   lastAiTransport?: 'claude-cli' | 'codex-cli' | 'opencode-cli';
+  // Sticky Claude Code model + reasoning effort picks from the composer.
+  // Passed as `--model` / `--effort`; empty = let the CLI use its default.
+  claudeCliModel?: string;
+  claudeCliEffort?: string;
 
   // MCP HTTP server (127.0.0.1:53825) that lets an external Claude/Codex
   // CLI introspect IDE state. Default on for the standard workflow;
@@ -213,6 +271,21 @@ export type AppSettings = {
   // start; user can rotate it from Settings → AI. Loopback clients
   // bypass auth (the local IDE chat needs no token).
   mcpAccessKey?: string;
+
+  // Atlassian Jira Cloud. The panel pulls real issues over the REST API and
+  // posts a completion comment back when an AI run finishes. Token is a Jira
+  // API token (id.atlassian.com → Security → API tokens), not a password.
+  jiraSite?: string;            // "byz.atlassian.net" or the full https URL
+  jiraEmail?: string;           // Atlassian account email (Basic auth user)
+  jiraApiToken?: string;
+  jiraJql?: string;             // default issue query for the Refresh button
+  // Status the ticket is moved to when its run finishes. Matched against the
+  // issue's available transitions by name, case-insensitively.
+  jiraDoneStatus?: string;      // default "In Progress"
+  // Which board file (`.opendev/jira*.json`) the JIRA panel is working in,
+  // keyed by workspace root. Kept here rather than in the board file so the
+  // files themselves stay plain ticket lists that can be committed.
+  jiraBoards?: Record<string, string>;
 
   // Modifier+click chords that trigger LSP navigation in the editor.
   // Values: 'meta' (⌘/Ctrl), 'ctrl' (literal Control on Mac), 'alt' (⌥),
@@ -420,7 +493,12 @@ export type RestMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 
 export type RestAuth =
   | { kind: 'none' }
   | { kind: 'bearer'; token: string }
-  | { kind: 'basic'; username: string; password: string };
+  | { kind: 'basic'; username: string; password: string }
+  // Borrow the bearer token the browser panel last sent. Resolved in main at
+  // send time, so the saved request never holds the token and keeps working
+  // after the app refreshes it. `origin` pins one API host; omitted = match
+  // the request URL's origin, falling back to the most recent capture.
+  | { kind: 'browser'; origin?: string };
 
 export type RestHeader = { key: string; value: string; enabled?: boolean };
 export type RestParam = { key: string; value: string; enabled?: boolean };
@@ -438,6 +516,8 @@ export type RestRequestSpec = {
   params: RestParam[];
   body: RestBody;
   auth: RestAuth;
+  /** Documentation only — what the endpoint does. Never sent. */
+  description?: string;
 };
 
 export type RestSavedRequest = RestRequestSpec & {
@@ -445,6 +525,20 @@ export type RestSavedRequest = RestRequestSpec & {
   name: string;
   folder?: string;
   updatedAt: number;
+};
+
+/** A bearer token seen in the browser panel's traffic or storage. */
+export type BrowserTokenInfo = {
+  /** Origin of the API the token was sent to (or the page, for storage hits). */
+  origin: string;
+  /** Last URL it was seen on. */
+  url: string;
+  seenAt: number;
+  source: 'header' | 'storage';
+  /** First/last few characters only — the raw token stays in main. */
+  preview: string;
+  /** JWT `exp` in ms, when the token is a decodable JWT. */
+  expiresAt?: number;
 };
 
 export type RestResponse = {
@@ -649,4 +743,135 @@ export type MlxStatus = {
   running: boolean;
   serviceId?: string;
   events: MlxTrainEvent[];          // capped to the most recent N (~500)
+};
+
+/* ------------------------------------------------------- Claude account (AI) */
+
+/**
+ * Who the IDE's AI is signed in as. Read from `claude auth status --json`,
+ * always against the credential store cliChildEnv pins — the same one the
+ * chat's CLI children use, which is not necessarily the one a terminal tab
+ * or a shell profile would select.
+ */
+export type ClaudeAuthStatus = {
+  loggedIn: boolean;
+  /** Absolute path of the CLI we ran, so the UI can say what it probed. */
+  binPath?: string;
+  email?: string;
+  orgName?: string;
+  subscriptionType?: string;
+  authMethod?: string;
+  apiProvider?: string;
+  configDirectory?: string;
+  /** Set when we couldn't get an answer at all (missing CLI, crash, timeout). */
+  error?: string;
+};
+
+/** Streamed to the renderer while a `claude auth login` is in flight. */
+export type ClaudeLoginEvent =
+  | { kind: 'output'; chunk: string }
+  | { kind: 'url'; url: string }
+  | { kind: 'done'; code: number; status: ClaudeAuthStatus };
+
+/** A saved browser login, as shown in a list — never carries the password. */
+export type SavedLogin = {
+  id: string;
+  /** Scheme + host + port, e.g. https://github.com */
+  origin: string;
+  username: string;
+  updatedAt: number;
+};
+
+/** A saved login with its password, handed out one origin at a time for autofill. */
+export type SavedLoginSecret = {
+  id: string;
+  origin: string;
+  username: string;
+  password: string;
+};
+
+export type PasswordStoreStatus = {
+  /** False when the OS offers no credential encryption; saving is refused. */
+  encryptionAvailable: boolean;
+  count: number;
+  neverSave: string[];
+};
+
+/* ------------------------------------------------------------- network log */
+
+/** Where a captured call came from: the IDE's own HTTP, or the browser panel. */
+export type NetSource = 'ide' | 'browser';
+
+/**
+ * What the NETWORK list shows. Deliberately body-free — a few hundred of
+ * these live in the renderer at once, and the bodies are fetched one at a
+ * time when a row is opened.
+ */
+export type NetEntrySummary = {
+  id: string;
+  source: NetSource;
+  /** Subsystem that made the call: rest, jira, es, llm, ai, browser, http. */
+  origin: string;
+  method: string;
+  url: string;
+  /** Split out so the list can show a short path and keep the host as context. */
+  host: string;
+  path: string;
+  status?: number;
+  statusText?: string;
+  startedAt: number;
+  durationMs?: number;
+  /** True between "request sent" and "response finished". */
+  pending: boolean;
+  responseSize?: number;
+  contentType?: string;
+  /** Browser rows only — xhr, fetch, document, eventsource. */
+  resourceType?: string;
+  error?: string;
+};
+
+/** A row with its bodies and headers, loaded on demand. */
+export type NetEntry = NetEntrySummary & {
+  requestHeaders: Record<string, string>;
+  requestBody?: string;
+  requestBodyTruncated?: boolean;
+  responseHeaders?: Record<string, string>;
+  responseBody?: string;
+  responseBodyTruncated?: boolean;
+};
+
+/* ------------------------------------------------------------ screen recorder */
+
+/** One capturable surface — a whole display or a single window. */
+export type CaptureSource = {
+  /** Opaque id handed back to getUserMedia as `chromeMediaSourceId`. */
+  id: string;
+  name: string;
+  kind: 'screen' | 'window';
+  /** PNG data URL preview, small enough to sit in the picker grid. */
+  thumbnail: string;
+};
+
+/** Handle returned when main has opened the output file for a new recording. */
+export type RecordingHandle = {
+  id: string;
+  path: string;
+};
+
+/** Result of finalizing a recording. */
+export type RecordingResult = {
+  path: string;
+  bytes: number;
+  /** Wall-clock length the renderer measured, in milliseconds. */
+  durationMs: number;
+};
+
+/** One tool call in a chat response, for the optional Activity log. Sent
+ *  more than once per call (target known, then finished); upsert on uid=1050623(d.zhao) gid=1049089 groups=1049089. */
+export type AiActivityMsg = {
+  streamId: string;
+  id: string;
+  tool: string;
+  target?: string;
+  status: 'running' | 'ok' | 'error';
 };
