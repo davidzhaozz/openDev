@@ -1,0 +1,41 @@
+# Enforces the release flow: each release branch only accepts pull requests
+# from its own platform's develop branch.
+#
+#   mac-develop     -> mac-release
+#   windows-develop -> windows-release
+#
+# The repository ruleset on the release branches requires this check, so a
+# PR from any other branch (e.g. windows-develop -> mac-release) can't merge.
+# pull_request_target runs the copy of this file on the *base* branch, so a
+# PR can't weaken the rule by editing it. Nothing from the PR is checked out.
+name: branch-guard
+
+on:
+  pull_request_target:
+    branches: [mac-release, windows-release]
+    types: [opened, reopened, synchronize, edited]
+
+permissions: {}
+
+jobs:
+  branch-guard:
+    name: branch-guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source branch
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          case "$BASE" in
+            mac-release)     allowed=mac-develop ;;
+            windows-release) allowed=windows-develop ;;
+            *) echo "No rule for $BASE"; exit 0 ;;
+          esac
+          if [ "$HEAD_REPO" != "$REPO" ] || [ "$HEAD" != "$allowed" ]; then
+            echo "::error::$BASE only accepts pull requests from $allowed (this one is from $HEAD_REPO:$HEAD)."
+            exit 1
+          fi
+          echo "OK: $HEAD -> $BASE"
