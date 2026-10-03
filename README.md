@@ -28,6 +28,10 @@ If you live in JS / TS, use Claude for coding, and want one app for code + AI + 
 | `mac-develop` | day-to-day work; merge feature branches here |
 | `mac-release` | what ships as the `.app` / `.dmg` (the repo's default branch); only take commits from `mac-develop` that have been run on a Mac |
 
+`mac-release` is protected: changes reach it only through a pull request from
+`mac-develop` (enforced by the `branch-guard` check and a repository ruleset);
+direct pushes and force-pushes are blocked. Releases are tagged `mac-vX.Y.Z`.
+
 The Windows edition is developed separately on `windows-develop` / `windows-release`.
 The two are different systems, so they are never merged into each other; a fix
 that applies to both is cherry-picked across.
