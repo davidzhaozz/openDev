@@ -78,4 +78,5 @@ if (problems.length) {
   for (const p of problems) console.error('  - ' + p);
   process.exit(1);
 }
-console.log(`[verify-mac] OK — Mac-only payload (${arch}), keytar Keychain round-trip and node-pty load pass`);
+const keychain = process.env.VERIFY_SKIP_KEYCHAIN ? 'keytar loads (Keychain round-trip skipped on CI)' : 'keytar Keychain round-trip';
+console.log(`[verify-mac] OK — Mac-only payload (${arch}), ${keychain} and node-pty load pass`);
