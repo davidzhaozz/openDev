@@ -1,8 +1,7 @@
 # openDev — macOS edition
 
-> **This branch (`mac-develop` / `mac-release`) is the macOS version of openDev and is built for the Mac only.**
-> The Windows version lives on `windows-develop` / `windows-release` and has its own README and release cadence.
-> See [Branches](#branches-macos-and-windows-are-separate-lines) for why they are separate.
+> **This branch (`mac-develop` / `mac-release`) is the macOS version of openDev. It is built for, and only runs on, the Mac.**
+> The Windows version is a separate codebase on the `windows-develop` / `windows-release` branches, with its own docs.
 
 **An AI-first IDE for macOS — JavaScript, TypeScript, and Python (with a dedicated MLX-LM panel for local LLM fine-tunes on Apple Silicon).** Claude lives in the core, an embedded browser with an element picker turns "make this bigger" into a real patch, a built-in SQL client puts MySQL / Postgres / Elasticsearch alongside your code, and a Python toolchain (interpreter picker, pip manager, debugpy, MLX training UI) sits right next to it.
 
@@ -22,36 +21,16 @@ If you live in JS / TS, use Claude for coding, and want one app for code + AI + 
 
 ---
 
-## Branches: macOS and Windows are separate lines
+## Branches
 
-openDev ships as **two versions, one per operating system**, and each has its own
-development and release branch:
+| Branch | Purpose |
+|---|---|
+| `mac-develop` | day-to-day work; merge feature branches here |
+| `mac-release` | what ships as the `.app` / `.dmg` (the repo's default branch); only take commits from `mac-develop` that have been run on a Mac |
 
-| Branch | Platform | Purpose |
-|---|---|---|
-| `mac-develop` | macOS | day-to-day macOS work; merge feature branches here |
-| `mac-release` | macOS | what ships as the `.app` / `.dmg`; only take tested commits from `mac-develop` |
-| `windows-develop` | Windows | day-to-day Windows work; merge feature branches here |
-| `windows-release` | Windows | what ships as the NSIS / portable `.exe`; only take tested commits from `windows-develop` |
-
-They are kept apart on purpose. The two builds target different systems —
-different shells, process and port handling, keychain vs. credential store,
-native modules built per platform, `.dmg` vs. `.exe` packaging — and a change
-that is right for one can break the other. Splitting the lines means a macOS
-release never waits on Windows verification (which only happens on CI, see
-[WINDOWS.md](WINDOWS.md)), and a Windows fix never lands in a Mac release
-untested.
-
-How to work with them:
-
-- Start platform work from that platform's `-develop` branch and merge back into it.
-- Promote to `-release` only when the build has been run on that OS (the Mac
-  locally, Windows via the `build` workflow).
-- A fix that applies to both (shared code in `src/shared/`, the renderer, etc.)
-  is committed to one `-develop` branch and cherry-picked into the other —
-  don't merge `mac-*` and `windows-*` into each other wholesale.
-- The Windows installer job in CI runs on `windows-develop`, `windows-release`
-  and on demand.
+The Windows edition is developed separately on `windows-develop` / `windows-release`.
+The two are different systems, so they are never merged into each other; a fix
+that applies to both is cherry-picked across.
 
 ---
 
@@ -171,15 +150,6 @@ npm run dist:dir       # unpacked .app only (faster, for testing)
 
 The build is unsigned by default. To ship it to other machines you'll want to set up an Apple Developer ID; see `electron-builder.yml` for the entitlements and notarization knobs.
 
-### Windows
-
-Not built from this branch. The Windows version (NSIS / portable `.exe`) is
-developed on `windows-develop` and released from `windows-release`:
-
-```bash
-git checkout windows-develop
-```
-
 ### Run it in a browser
 
 ```bash
@@ -250,7 +220,7 @@ Right side panel → **DB** → ➕. Each profile holds host, port, user, databa
 
 ## Architecture (one paragraph)
 
-Electron app: **main** process owns workspace state, subprocess management (TypeScript LSP, ripgrep, Claude CLI, `node-pty`), DB pools, and the MCP HTTP server. **Renderer** is React + Zustand, talks to main exclusively through Electron's `contextBridge`. **Webviews** isolate user content (dev servers, embedded HTTP UIs) with `nodeIntegration: false`. Long-running data sources (PTY, AI streams, service logs, DB results) are all capped and back-pressured at the main-process boundary so the renderer can't be drowned. IPC channels are namespaced (`fs:read`, `ai:send`, `db:query`, etc.) and typed end-to-end via `src/shared/`. The **web build** (`src/server/`, `src/web/`) reuses main, preload, and renderer verbatim: it swaps the `electron` module for a shim on both ends and carries the same IPC channels over a WebSocket — see [WEB.md](WEB.md). Everything platform-specific — executable lookup, shells, process trees, port enumeration — is isolated in `src/main/platform.ts`, and path-string handling shared between processes in `src/shared/paths.ts`; see [WINDOWS.md](WINDOWS.md).
+Electron app: **main** process owns workspace state, subprocess management (TypeScript LSP, ripgrep, Claude CLI, `node-pty`), DB pools, and the MCP HTTP server. **Renderer** is React + Zustand, talks to main exclusively through Electron's `contextBridge`. **Webviews** isolate user content (dev servers, embedded HTTP UIs) with `nodeIntegration: false`. Long-running data sources (PTY, AI streams, service logs, DB results) are all capped and back-pressured at the main-process boundary so the renderer can't be drowned. IPC channels are namespaced (`fs:read`, `ai:send`, `db:query`, etc.) and typed end-to-end via `src/shared/`. The **web build** (`src/server/`, `src/web/`) reuses main, preload, and renderer verbatim: it swaps the `electron` module for a shim on both ends and carries the same IPC channels over a WebSocket — see [WEB.md](WEB.md). OS-level process plumbing — executable lookup, shells, process trees, port enumeration — lives in `src/main/platform.ts`, and path-string handling shared between processes in `src/shared/paths.ts`.
 
 ---
 

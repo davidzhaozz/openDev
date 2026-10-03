@@ -41,7 +41,6 @@ import { python as pythonLegacy } from '@codemirror/legacy-modes/mode/python';
 import { yaml as yamlLegacy } from '@codemirror/legacy-modes/mode/yaml';
 import { StreamLanguage } from '@codemirror/language';
 import { baseName, dirName, fileUriToPath, pathToFileUri } from '@shared/paths';
-import { isMacPlatform } from '../platformUi';
 
 function langForPath(path: string) {
   const ext = path.split('.').pop()?.toLowerCase();
@@ -297,19 +296,8 @@ export function CodeEditor({ path, value, onChange, onSave, onJumpTo }: Props) {
   // match a plain "meta" click.
   const chordMatches = (e: MouseEvent, chord: string): boolean => {
     const parts = new Set(chord.split('+'));
-    if (isMacPlatform()) {
-      return (parts.has('meta') === !!e.metaKey)
-        && (parts.has('ctrl') === !!e.ctrlKey)
-        && (parts.has('alt')  === !!e.altKey)
-        && (parts.has('shift') === !!e.shiftKey);
-    }
-    // Windows and Linux have no Command key, so "⌘ + click" and "literal
-    // Control + click" collapse onto the same chord — either choice in
-    // Settings gives Ctrl+click. The Windows key (reported as metaKey) is
-    // never part of a chord.
-    const wantsCtrl = parts.has('meta') || parts.has('ctrl');
-    return (wantsCtrl === !!e.ctrlKey)
-      && !e.metaKey
+    return (parts.has('meta') === !!e.metaKey)
+      && (parts.has('ctrl') === !!e.ctrlKey)
       && (parts.has('alt')  === !!e.altKey)
       && (parts.has('shift') === !!e.shiftKey);
   };

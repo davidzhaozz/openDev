@@ -14,7 +14,6 @@ import { rgPath } from '@vscode/ripgrep';
 
 const pexec = promisify(exec);
 const pexecFile = promisify(execFile);
-const IS_WIN = process.platform === 'win32';
 const WORKSPACE = process.env.SMOKE_WORKSPACE;
 if (!WORKSPACE) {
   console.error('Set SMOKE_WORKSPACE=/path/to/project to run.');
@@ -76,20 +75,8 @@ async function autoDetectServices(root) {
   return candidates;
 }
 
-// Mirrors src/main/ports.ts. `netstat -ano` is the Windows equivalent of the
-// lsof query and needs no elevation.
+// Mirrors src/main/ports.ts.
 async function listListeningPorts() {
-  if (IS_WIN) {
-    const { stdout } = await pexecFile('netstat', ['-ano'], { maxBuffer: 8 * 1024 * 1024, windowsHide: true });
-    const ports = [];
-    for (const line of stdout.split('\n')) {
-      const m = line.match(/^\s*TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)\s*$/);
-      if (!m) continue;
-      const port = m[1].match(/:(\d+)$/);
-      if (port) ports.push({ port: Number(port[1]), pid: Number(m[2]), protocol: 'tcp' });
-    }
-    return ports;
-  }
   const { stdout } = await pexec('lsof -nP -iTCP -sTCP:LISTEN -F pcPn', { maxBuffer: 4 * 1024 * 1024 });
   const ports = [];
   let cur = {};
@@ -105,14 +92,8 @@ async function listListeningPorts() {
   return ports;
 }
 
-// Windows has no process groups to signal; taskkill /T walks the tree.
 function killTree(pid, force) {
   if (!pid) return;
-  if (IS_WIN) {
-    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); }
-    catch { /* already gone */ }
-    return;
-  }
   const signal = force ? 'SIGKILL' : 'SIGTERM';
   try { process.kill(-pid, signal); } catch { try { process.kill(pid, signal); } catch {} }
 }
@@ -121,13 +102,10 @@ async function startServiceAndWaitForPort(def, root, expectedPort, timeoutMs) {
   const cwd = resolve(root, def.cwd);
   const proc = spawn(def.command, {
     cwd,
-    shell: IS_WIN ? (process.env.COMSPEC || true) : true,
+    shell: true,
     env: { ...process.env, FORCE_COLOR: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
-    // detached would open a console window per service on Windows; the tree
-    // is walked by taskkill instead.
-    detached: !IS_WIN,
-    windowsHide: true
+    detached: true
   });
   const logs = [];
   let stdoutSeen = false;

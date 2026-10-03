@@ -62,10 +62,9 @@ function convPath(id: string): string | null {
   return dir ? join(dir, `${id}.json`) : null;
 }
 
-// Resolve a CLI name (e.g. "claude") to an absolute path. The walk itself is
-// platform-specific — Windows has to try PATHEXT, since `claude`, `npm` and
-// `tsx` are all `.cmd` shims there — so it lives in platform.ts. Re-exported
-// here because this is where the rest of main/ has always imported it from.
+// Resolve a CLI name (e.g. "claude") to an absolute path. The walk lives in
+// platform.ts; re-exported here because this is where the rest of main/ has
+// always imported it from.
 export { resolveBinPath };
 
 async function listConversations(): Promise<Conversation[]> {

@@ -1,15 +1,11 @@
 #!/usr/bin/env node
-// Cross-platform smoke test for the IDE's main process.
+// Smoke test for the IDE's main process.
 //
 // Unlike scripts/smoke.mjs — which re-implements the mechanics it checks —
 // this drives the *real* code. The web server in src/server/ runs every module
 // under src/main/ on plain Node, so starting it and exercising its IPC
 // channels tests the actual filesystem, git, search, ports, terminal and
-// Python paths, on whatever OS the runner happens to be.
-//
-// That's what makes it useful in CI: a Windows runner here proves the Windows
-// branches in platform.ts / ports.ts / term.ts work, without anyone owning a
-// Windows machine.
+// Python paths on macOS.
 //
 // Usage: node scripts/smoke-headless.mjs [workspace]   (defaults to this repo)
 

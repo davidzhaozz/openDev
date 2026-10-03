@@ -105,20 +105,17 @@ const appVersion = (() => {
   } catch { return '0.0.0'; }
 })();
 
-// Mirrors Electron's per-platform app.getPath(). Default is the same location
+// Mirrors Electron's app.getPath() on macOS. Default is the same location
 // the desktop build uses, so the web server sees the same settings, recent
 // projects, and conversations. Set OPENDEV_DATA_DIR to keep them separate.
 function appDataRoot(): string {
   if (process.env.OPENDEV_DATA_DIR) return process.env.OPENDEV_DATA_DIR;
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support');
-  if (process.platform === 'win32') return process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-  return process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
+  return join(homedir(), 'Library', 'Application Support');
 }
 
 function logsRoot(): string {
   if (process.env.OPENDEV_DATA_DIR) return join(process.env.OPENDEV_DATA_DIR, 'logs');
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Logs', 'OpenDev IDE');
-  return join(appDataRoot(), 'OpenDev IDE', 'logs');
+  return join(homedir(), 'Library', 'Logs', 'OpenDev IDE');
 }
 
 let appName = 'OpenDev IDE';

@@ -3,24 +3,21 @@ import { spawn, execSync } from 'child_process';
 import { safeSend } from './safeSend.js';
 import { LIMITS, tail } from './limits.js';
 import type { InstallableTool, ToolInstallResult } from '@shared/types';
-import { spawnBin, hasBin, IS_WIN } from './platform.js';
+import { spawnBin, hasBin } from './platform.js';
 
-// `brew` on macOS, `winget` on Windows — the field is named for the macOS
-// case because that's what the renderer has always keyed off; on Windows it
-// answers "is there a package manager we can install through".
+// `brew` = is Homebrew available to install missing tools through.
 export type ToolCheck = { npm: boolean; node: boolean; brew: boolean; git: boolean; npmVersion?: string; nodeVersion?: string };
 
 const which = hasBin;
 
 /** Name of the system package manager we drive, or null if there isn't one. */
-function packageManager(): 'brew' | 'winget' | null {
-  if (IS_WIN) return which('winget') ? 'winget' : null;
+function packageManager(): 'brew' | null {
   return which('brew') ? 'brew' : null;
 }
 
 function version(cmd: string, flag = '--version'): string | undefined {
   try {
-    const r = execSync(`${cmd} ${flag}`, { encoding: 'utf8', env: process.env, timeout: 2000, windowsHide: true });
+    const r = execSync(`${cmd} ${flag}`, { encoding: 'utf8', env: process.env, timeout: 2000 });
     return r.trim().split('\n')[0];
   } catch { return undefined; }
 }
@@ -73,34 +70,9 @@ function brewArgsFor(tool: InstallableTool): string[] | null {
   }
 }
 
-// winget package IDs. `--silent` keeps the installer from opening a UI the
-// user can't reach from inside the log pane; the accept flags stop it from
-// blocking on an agreement prompt that has no TTY to answer it.
-function wingetIdFor(tool: InstallableTool): string | null {
-  switch (tool) {
-    case 'node':   return 'OpenJS.NodeJS.LTS';
-    case 'mvn':    return 'Apache.Maven';
-    case 'java':   return 'EclipseAdoptium.Temurin.17.JDK';
-    case 'dotnet': return 'Microsoft.DotNet.SDK.8';
-    default:       return null;
-  }
-}
-
 async function installTool(tool: InstallableTool): Promise<ToolInstallResult> {
   const manager = packageManager();
-  if (!manager) {
-    return IS_WIN
-      ? { ok: false, error: 'winget is not available. Install "App Installer" from the Microsoft Store, or install the tool manually.' }
-      : { ok: false, error: 'Homebrew is not installed. Install it from https://brew.sh first.' };
-  }
-  if (manager === 'winget') {
-    const id = wingetIdFor(tool);
-    if (!id) return { ok: false, error: `Don't know how to install "${tool}" with winget.` };
-    return runStreamedInstall('winget', [
-      'install', '--id', id, '--exact', '--silent',
-      '--accept-package-agreements', '--accept-source-agreements'
-    ]);
-  }
+  if (!manager) return { ok: false, error: 'Homebrew is not installed. Install it from https://brew.sh first.' };
   const argv = brewArgsFor(tool);
   if (!argv) return { ok: false, error: `Don't know how to install "${tool}".` };
   return runStreamedInstall('brew', argv);

@@ -8,28 +8,16 @@ import { IPC } from '@shared/ipc';
 import type { ServiceDef, ServiceRuntime, ServiceStatus } from '@shared/types';
 import { workspace } from './workspace.js';
 import { onShutdown } from './lifecycle.js';
-import { freePort, listListeningPorts } from './ports.js';
-import { IS_WIN, commandShell, descendantPids, detachedSpawnOptions, killTree } from './platform.js';
+import { freePort } from './ports.js';
+import { commandShell, detachedSpawnOptions, killTree } from './platform.js';
 import { safeSend } from './safeSend.js';
 import { baseName, isWithin } from '@shared/paths';
 
 const pexec = promisify(exec);
 
-// Which ports is this service actually holding? On POSIX the spawned shell
-// and its children share a process group, so lsof can filter by it directly.
-// Windows has no equivalent, so we walk the parent/child links and match the
-// listener table against that PID set.
+// Which ports is this service actually holding? The spawned shell and its
+// children share a process group, so lsof can filter by it directly.
 async function listeningPortsForService(rootPid: number): Promise<number[]> {
-  if (IS_WIN) {
-    try {
-      const pids = new Set(await descendantPids(rootPid));
-      const listeners = await listListeningPorts();
-      const ports = new Set(listeners.filter((l) => pids.has(l.pid)).map((l) => l.port));
-      return [...ports].sort((a, b) => a - b);
-    } catch {
-      return [];
-    }
-  }
   try {
     const { stdout } = await pexec(`lsof -nP -iTCP -sTCP:LISTEN -a -g ${rootPid} -F n`, { timeout: 1500, maxBuffer: 2 * 1024 * 1024 });
     const ports = new Set<number>();
@@ -293,11 +281,9 @@ class ServiceManager {
     }
 
     log.push(`[opendev] $ ${def.command}\n[opendev] cwd: ${cwd}\n[opendev] PATH=${(process.env.PATH || '').split(delimiter).slice(0, 6).join(delimiter)}…\n`);
-    // On POSIX, detached:true puts the shell + children into a new process
-    // group so we can signal the whole tree on shutdown — without it, killing
-    // the wrapping shell leaves npm/tsx/node orphans bound to dev ports. On
-    // Windows detached would open a console window per service, so the tree is
-    // walked by taskkill at stop time instead (see platform.killTree).
+    // detached:true puts the shell + children into a new process group so we
+    // can signal the whole tree on shutdown — without it, killing the
+    // wrapping shell leaves npm/tsx/node orphans bound to dev ports.
     const proc = spawn(def.command, {
       cwd,
       shell: commandShell(),

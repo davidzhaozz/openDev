@@ -252,7 +252,7 @@ async function main(): Promise<void> {
     console.log('');
     if (hasFlag('open')) {
       import('child_process').then(({ spawn }) => {
-        const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+        const opener = 'open';
         spawn(opener, [url], { stdio: 'ignore', detached: true }).unref();
       });
     }

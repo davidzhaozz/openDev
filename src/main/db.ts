@@ -223,9 +223,7 @@ async function probeNc(host: string, port: number, timeoutMs = 5000): Promise<Pr
 
 async function runNetworkDiagnostic(host: string, port: number): Promise<ProbeStep[]> {
   const probes = [probeRawSocket(host, port, 4), probeRawSocket(host, port)];
-  // `nc` is the macOS/Linux cross-check for the Local Network TCC prompt.
-  // Windows has neither that permission model nor netcat, so running it there
-  // only adds a "spawn failed" line to the diagnostic.
+  // `nc` is the cross-check for the macOS Local Network (TCC) prompt.
   if (hasBin('nc')) probes.push(probeNc(host, port));
   return Promise.all(probes);
 }

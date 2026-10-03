@@ -32,7 +32,6 @@ import { PythonPicker } from './components/PythonPicker';
 import { RunBar } from './components/RunBar';
 import { BottomBar } from './components/BottomBar';
 import { baseName, dirName, pathToFileUri, shortenHome } from '@shared/paths';
-import { WindowControls, usesFramelessChrome } from './components/WindowControls';
 import { modKey } from './platformUi';
 
 export default function App() {
@@ -341,28 +340,6 @@ export default function App() {
   // Listen for native menu events
   useEffect(() => window.opendev.menu.onEvent(runMenuAction), [runMenuAction]);
 
-  // Only macOS has a native application menu — its frameless siblings have no
-  // menu bar to hang accelerators off, so the same four shortcuts are bound
-  // here instead. Same key combinations, same actions.
-  useEffect(() => {
-    if (!usesFramelessChrome()) return;
-    const shortcuts: Array<{ key: string; shift?: boolean; action: string }> = [
-      { key: ',', action: 'settings' },
-      { key: 'o', action: 'open-project' },
-      { key: 'n', shift: true, action: 'new-project' },
-      { key: 'w', shift: true, action: 'close-project' }
-    ];
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey) return;
-      const hit = shortcuts.find((s) => s.key === e.key.toLowerCase() && !!s.shift === e.shiftKey);
-      if (!hit) return;
-      e.preventDefault();
-      void runMenuAction(hit.action);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [runMenuAction]);
-
   useEffect(() => {
     const dismiss = () => setTabCtx(null);
     window.addEventListener('click', dismiss);
@@ -521,7 +498,6 @@ export default function App() {
       <div className="titlebar">
         <span className="title">{projectName}</span>
         <span className="path">{projectParent} · v{window.opendev.app.version()}</span>
-        {usesFramelessChrome() && <WindowControls />}
       </div>
 
       <div className="workspace">

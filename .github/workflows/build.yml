@@ -1,9 +1,5 @@
-# Cross-platform build + smoke.
-#
-# The Windows job is the point: OpenDev is developed on a Mac, so this runner
-# is the only place the Windows branches in platform.ts, ports.ts, term.ts and
-# python.ts actually execute. It also produces the installer, since NSIS can't
-# be built on macOS without Wine.
+# macOS build + smoke. This is the macOS edition; the Windows edition and its
+# CI live on the windows-develop / windows-release branches.
 name: build
 
 on:
@@ -14,12 +10,8 @@ on:
 
 jobs:
   check:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
+    name: macos
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -43,37 +35,6 @@ jobs:
         run: npm run web:build
 
       # Exercises the real main-process code — filesystem, git, ripgrep, port
-      # enumeration, a live PTY, Python detection — on this OS.
+      # enumeration, a live PTY, Python detection — on macOS.
       - name: Headless smoke
         run: node scripts/smoke-headless.mjs
-
-  windows-installer:
-    name: windows installer
-    runs-on: windows-latest
-    needs: check
-    # Only worth the ~5 minutes on the Windows branches and on demand.
-    if: github.ref == 'refs/heads/windows-develop' || github.ref == 'refs/heads/windows-release' || github.event_name == 'workflow_dispatch'
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-
-      - name: Package
-        run: npm run dist:win
-        env:
-          # electron-builder would otherwise try to publish to GitHub Releases.
-          GH_TOKEN: ''
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OpenDev-IDE-windows
-          path: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/latest*.yml
-          if-no-files-found: error
-          retention-days: 30

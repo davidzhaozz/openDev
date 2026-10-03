@@ -93,8 +93,6 @@ async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> 
       cols,
       rows,
       cwd,
-      // node-pty drives ConPTY on Windows, which needs a real console host —
-      // useConpty:false would fall back to winpty and lose resize fidelity.
       env: process.env as Record<string, string>
     });
     return {
@@ -108,7 +106,7 @@ async function createPty(cwd: string, cols: number, rows: number): Promise<PTY> 
   const { spawn } = await import('child_process');
   // Fallback when node-pty's native module can't load. No TTY, so no prompt
   // redraw or resize — but the shell still runs.
-  const child = spawn(shell, shellArgs.length ? shellArgs : ['-i'], { cwd, env: process.env, windowsHide: true });
+  const child = spawn(shell, shellArgs.length ? shellArgs : ['-i'], { cwd, env: process.env });
   return {
     write: (s) => child.stdin?.write(s),
     resize: () => { /* not supported in fallback */ },

@@ -6,21 +6,9 @@ import { delimiter, join } from 'path';
 let resolved = false;
 
 // Where package managers put things that a GUI-launched process won't have on
-// PATH. macOS: a Finder-launched .app starts with /usr/bin:/bin:/usr/sbin:/sbin.
-// Windows: Explorer gives the full user PATH, but nvm-windows, Scoop and a
-// per-user npm prefix are all common enough to be worth adding blind.
+// PATH: a Finder-launched .app starts with /usr/bin:/bin:/usr/sbin:/sbin.
 function commonBinDirs(): string[] {
   const home = homedir();
-  if (process.platform === 'win32') {
-    return [
-      join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
-      join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'npm'),
-      join(process.env.ProgramData || 'C:\\ProgramData', 'chocolatey', 'bin'),
-      join(home, 'scoop', 'shims'),
-      join(home, '.cargo', 'bin'),
-      join(home, 'AppData', 'Local', 'Microsoft', 'WindowsApps')
-    ];
-  }
   return [
     '/opt/homebrew/bin',
     '/opt/homebrew/sbin',
@@ -46,7 +34,6 @@ function dedupePath(parts: string[]): string {
 }
 
 function pathFromLoginShell(): string | null {
-  if (process.platform === 'win32') return null;
   const shell = process.env.SHELL || '/bin/zsh';
   // `-ilc` = interactive login command. Sourcing rc files is what `which npm`
   // depends on when the user invokes things from Terminal.

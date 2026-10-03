@@ -1,14 +1,13 @@
 import { ipcMain } from 'electron';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, statSync, promises as fs } from 'fs';
+import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import { join, delimiter, basename, dirname } from 'path';
 import { IPC } from '@shared/ipc';
 import type { PythonInterpreter } from '@shared/types';
 import { workspace } from './workspace.js';
 import { safeSend } from './safeSend.js';
-import { IS_WIN, withExtensions } from './platform.js';
 
 const pexec = promisify(exec);
 
@@ -45,10 +44,8 @@ async function listDirSafe(dir: string): Promise<string[]> {
   try { return await fs.readdir(dir); } catch { return []; }
 }
 
-// A virtualenv puts its interpreter in bin/ on POSIX and Scripts/ on Windows,
-// and the executable is python.exe rather than python/python3.
-const VENV_BIN = IS_WIN ? 'Scripts' : 'bin';
-const PY_NAMES = IS_WIN ? ['python.exe'] : ['python', 'python3'];
+const VENV_BIN = 'bin';
+const PY_NAMES = ['python', 'python3'];
 
 function addVenv(out: Candidate[], dir: string, label: string): void {
   for (const name of PY_NAMES) addIfExists(out, join(dir, VENV_BIN, name), 'venv', label);
@@ -69,30 +66,22 @@ async function gatherCandidates(): Promise<Candidate[]> {
     addVenv(out, join(root, '..', '.venv'), '../.venv');
   }
 
-  if (IS_WIN) await gatherWindowsCandidates(out, home);
-  else await gatherPosixCandidates(out, home);
+  await gatherMacCandidates(out, home);
 
   // Last: PATH — anything the user explicitly put there that isn't already
-  // covered. `where`/PATHEXT means the Windows names carry their extension.
+  // covered.
   for (const bin of PY_NAMES) {
     for (const dir of (process.env.PATH || '').split(delimiter)) {
       if (!dir) continue;
       const p = join(dir, bin);
-      // Skip the Microsoft Store alias stubs: they are 0-byte reparse points
-      // that open the Store instead of running Python.
-      if (existsSync(p) && !isStoreStub(p)) out.push({ path: p, kind: 'path', label: `PATH (${dir})` });
+      if (existsSync(p)) out.push({ path: p, kind: 'path', label: `PATH (${dir})` });
     }
   }
 
   return uniqByPath(out);
 }
 
-function isStoreStub(p: string): boolean {
-  if (!IS_WIN) return false;
-  try { return statSync(p).size === 0; } catch { return false; }
-}
-
-async function gatherPosixCandidates(out: Candidate[], home: string): Promise<void> {
+async function gatherMacCandidates(out: Candidate[], home: string): Promise<void> {
   // Homebrew on macOS (both arches).
   addIfExists(out, '/opt/homebrew/bin/python3', 'homebrew', 'Homebrew (arm64)');
   addIfExists(out, '/usr/local/bin/python3', 'homebrew', 'Homebrew (x86_64)');
@@ -122,48 +111,6 @@ async function gatherPosixCandidates(out: Candidate[], home: string): Promise<vo
     addIfExists(out, join(condaRoot, 'bin', 'python'), 'conda', `${basename(condaRoot)}:base`);
     for (const env of await listDirSafe(join(condaRoot, 'envs'))) {
       addIfExists(out, join(condaRoot, 'envs', env, 'bin', 'python'), 'conda', `${basename(condaRoot)}:${env}`);
-    }
-  }
-}
-
-async function gatherWindowsCandidates(out: Candidate[], home: string): Promise<void> {
-  // The `py` launcher is the authoritative registry of installed CPythons.
-  // `py -0p` prints one "-V:3.12 *  C:\...\python.exe" line per install.
-  try {
-    const { stdout } = await pexec('py -0p', { timeout: 4000, windowsHide: true });
-    for (const line of stdout.split('\n')) {
-      const m = line.match(/^\s*-V:([^\s*]+)\s*\*?\s+(.+?)\s*$/);
-      if (!m) continue;
-      addIfExists(out, m[2], 'framework', `python.org ${m[1]}`);
-    }
-  } catch { /* py launcher not installed — the directory scans below still apply */ }
-
-  // python.org per-user and machine-wide installer layouts.
-  const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local');
-  for (const base of [
-    join(localAppData, 'Programs', 'Python'),
-    join(process.env.ProgramFiles || 'C:\\Program Files'),
-    join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)')
-  ]) {
-    for (const dir of await listDirSafe(base)) {
-      if (!/^Python\d/i.test(dir)) continue;
-      addIfExists(out, join(base, dir, 'python.exe'), 'system', `python.org ${dir.replace(/^Python/i, '')}`);
-    }
-  }
-
-  // Conda / Miniforge — on Windows the base interpreter sits at the root of
-  // the install, not in a bin/ subdirectory.
-  for (const condaRoot of [
-    join(home, 'miniforge3'),
-    join(home, 'anaconda3'),
-    join(home, 'miniconda3'),
-    join(home, 'mambaforge'),
-    join(process.env.ProgramData || 'C:\\ProgramData', 'anaconda3'),
-    join(process.env.ProgramData || 'C:\\ProgramData', 'miniconda3')
-  ]) {
-    addIfExists(out, join(condaRoot, 'python.exe'), 'conda', `${basename(condaRoot)}:base`);
-    for (const env of await listDirSafe(join(condaRoot, 'envs'))) {
-      addIfExists(out, join(condaRoot, 'envs', env, 'python.exe'), 'conda', `${basename(condaRoot)}:${env}`);
     }
   }
 }
@@ -270,8 +217,7 @@ export async function createVenv(opts: { basePython: string; dirName?: string })
   safeSend(IPC.PythonVenvLog, `[opendev] $ ${opts.basePython} -m venv ${dirName}\n`);
   const proc = spawn(opts.basePython, ['-m', 'venv', dirName], {
     cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true
+    stdio: ['ignore', 'pipe', 'pipe']
   });
   const push = (b: Buffer) => safeSend(IPC.PythonVenvLog, b.toString('utf8'));
   proc.stdout?.on('data', push);
@@ -281,8 +227,7 @@ export async function createVenv(opts: { basePython: string; dirName?: string })
   // Fresh on disk; invalidate the cache so the new entry shows up.
   listCache = null;
   // Auto-select the just-created venv so the user doesn't have to click twice.
-  const newPython = withExtensions(join(target, VENV_BIN, IS_WIN ? 'python' : 'python'))
-    .find((p) => existsSync(p)) || join(target, VENV_BIN, PY_NAMES[0]);
+  const newPython = join(target, VENV_BIN, PY_NAMES[0]);
   return setSelectedInterpreter(newPython);
 }
 

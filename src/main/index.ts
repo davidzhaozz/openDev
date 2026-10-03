@@ -60,18 +60,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 
-// macOS keeps its traffic lights and insets them over our own titlebar.
-// Windows and Linux go frameless and get the controls the renderer draws —
-// `titleBarOverlay` would give native buttons but cannot be combined with a
-// transparent window, and transparency is the whole point of the --bg-alpha
-// slider in Settings.
-function windowChromeOptions(): Electron.BrowserWindowConstructorOptions {
-  if (process.platform === 'darwin') {
-    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 } };
-  }
-  return { frame: false };
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -84,7 +72,9 @@ function createWindow() {
     // user moves the slider in Settings.
     transparent: true,
     backgroundColor: '#00000000',
-    ...windowChromeOptions(),
+    // Native traffic lights, inset over our own titlebar.
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
       preload: join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
       contextIsolation: true,
@@ -95,12 +85,6 @@ function createWindow() {
   });
 
   mainWindow.on('ready-to-show', () => mainWindow?.show());
-
-  // The frameless chrome draws its own maximize/restore glyph, so it needs to
-  // know when the state changes by any other route (double-click, Win+Up).
-  const sendMaximized = () => mainWindow?.webContents.send(IPC.WindowMaximizedChanged, mainWindow.isMaximized());
-  mainWindow.on('maximize', sendMaximized);
-  mainWindow.on('unmaximize', sendMaximized);
 
   // Drop the reference when the window is gone — otherwise `mainWindow`
   // keeps pointing at a destroyed BrowserWindow, and any later access to
@@ -158,8 +142,7 @@ function sendMenu(action: string) {
 }
 
 function buildAppMenu() {
-  const isMac = process.platform === 'darwin';
-  // Custom app menu (macOS only) so we can hook a "Preferences…" item where
+  // Custom app menu so we can hook a "Preferences…" item where
   // macOS users expect it — directly under "About", with the conventional
   // ⌘, accelerator. Electron's built-in `role: 'appMenu'` omits Preferences.
   const appMenu: Electron.MenuItemConstructorOptions = {
@@ -179,22 +162,15 @@ function buildAppMenu() {
     ]
   };
   const template: Electron.MenuItemConstructorOptions[] = [
-    ...(isMac ? [appMenu] : []),
+    appMenu,
     {
       label: 'File',
       submenu: [
         { label: 'New Project…', accelerator: 'Shift+CmdOrCtrl+N', click: () => sendMenu('new-project') },
         { label: 'Open Project…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-project') },
         { label: 'Close Project', accelerator: 'Shift+CmdOrCtrl+W', click: () => sendMenu('close-project') },
-        // On macOS, Preferences lives in the App menu (above). On other
-        // platforms there's no App menu, so surface it here as a fallback
-        // — the build is macOS-only today, but cheap insurance.
-        ...(!isMac ? [
-          { type: 'separator' as const },
-          { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') }
-        ] : []),
         { type: 'separator' },
-        isMac ? { role: 'close' } : { role: 'quit' }
+        { role: 'close' }
       ]
     },
     { role: 'editMenu' },

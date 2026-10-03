@@ -358,11 +358,7 @@ const api = {
   window: {
     popoutFile: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.WindowPopoutFile, path),
     popoutAi: (opts?: { conversationId?: string; name?: string; initialPrompt?: string }): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {}),
-    minimize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMinimize),
-    toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowMaximizeToggle),
-    close: (): Promise<boolean> => ipcRenderer.invoke(IPC.WindowClose),
-    onMaximizedChanged: (cb: (maximized: boolean) => void) => on(IPC.WindowMaximizedChanged, cb)
+      ipcRenderer.invoke(IPC.WindowPopoutAi, opts || {})
   },
   tools: {
     check: (): Promise<{ npm: boolean; node: boolean; brew: boolean; git: boolean; npmVersion?: string; nodeVersion?: string }> =>

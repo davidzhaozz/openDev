@@ -19,31 +19,24 @@ files:
   # packages — a dangling symlink aborts the whole build with ENOENT. Nothing
   # at runtime needs it, and `npm rebuild` can recreate it, so exclude it.
   - "!node_modules/node-pty/build/node_gyp_bins/**"
-  # Debug symbols for the prebuilt natives — ~28 MB that nothing reads at
-  # runtime. Excluded so the Windows installer isn't needlessly fat.
+  # Debug symbols for the prebuilt natives — nothing reads them at runtime.
   - "!node_modules/**/*.pdb"
 # Both native modules ship N-API prebuilds — node-pty 1.1 builds against
-# node-addon-api and carries prebuilds/win32-x64 &c., and keytar publishes its
-# binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
+# node-addon-api and carries prebuilds/darwin-arm64 &c., and keytar publishes
+# its binaries with `prebuild -r napi`. N-API is ABI-stable across Node and
 # Electron, so those binaries load under Electron exactly as npm installed
-# them. @electron/rebuild doesn't recognise the prebuildify layout and tries to
-# compile node-pty from source anyway, which is the only thing in this build
-# that needs a C++ toolchain — and it fails on the GitHub windows runner, whose
-# Visual Studio node-gyp can't find. Skipping the rebuild drops that toolchain
-# dependency entirely; if a future dependency is NAN-based rather than N-API,
-# this has to come back on and the runner needs a working MSVC.
+# them; @electron/rebuild would only recompile node-pty from source. If a
+# future dependency is NAN-based rather than N-API, this has to come back on.
 npmRebuild: false
 asarUnpack:
   - "**/*.node"
-  # node-pty needs more than its .node files on Windows: ConPTY loads
-  # conpty.dll and spawns OpenConsole.exe, and the winpty fallback spawns
-  # winpty-agent.exe. None of those can be loaded or executed from inside the
-  # asar, so the whole package is unpacked.
+  # node-pty spawns its spawn-helper binary, which can't be executed from
+  # inside the asar, so the whole package is unpacked.
   - "node_modules/node-pty/**/*"
   # These spawn as separate processes, so they must exist as real files on
   # disk — code can't be executed from inside the asar bundle.
   # @vscode/ripgrep 1.18 moved the binary into per-platform sibling packages
-  # (@vscode/ripgrep-darwin-arm64, -win32-x64, …), so the glob has to reach
+  # (@vscode/ripgrep-darwin-arm64, …), so the glob has to reach
   # those too — otherwise `rg` ends up inside the asar, where it can't run and
   # find-in-files silently returns nothing.
   - "node_modules/@vscode/ripgrep*/**/*"
@@ -81,34 +74,6 @@ mac:
       - _https._tcp
       - _postgresql._tcp
       - _mysql._tcp
-win:
-  # NSIS installer for normal use, plus a portable .exe for machines where the
-  # user can't run an installer (locked-down corporate images, quick tests on
-  # a throwaway VM). Both are x64; Windows-on-ARM runs x64 under emulation.
-  target:
-    - target: nsis
-      arch:
-        - x64
-    - target: portable
-      arch:
-        - x64
-  # Unsigned. Windows SmartScreen will warn on first run until these are signed
-  # with an EV or OV code-signing certificate — set CSC_LINK / CSC_KEY_PASSWORD
-  # in the environment to sign at build time.
-  artifactName: ${productName}-${version}-${arch}.${ext}
-portable:
-  # Without its own name the portable target renders to the same
-  # ${productName}-${version}-${arch}.${ext} path as nsis and silently
-  # overwrites the installer — the build reports success and only one .exe
-  # survives.
-  artifactName: ${productName}-${version}-${arch}-portable.${ext}
-nsis:
-  oneClick: false
-  perMachine: false
-  allowToChangeInstallationDirectory: true
-  createDesktopShortcut: true
-  createStartMenuShortcut: true
-  shortcutName: OpenDev IDE
 dmg:
   contents:
     - x: 130
