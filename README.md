@@ -214,6 +214,38 @@ Produces, in `dist\`:
 unsigned. First-time signing setup (`scripts\new-signing-cert.ps1`, no admin
 needed) is described in [WINDOWS.md](WINDOWS.md#code-signing).
 
+### About the signature on published builds
+
+The `.exe` files published on GitHub Releases are signed with a **self-signed
+development certificate only** (`CN=OpenDev IDE (Development)`), not a
+certificate from a public authority. On your machine Windows does not trust
+that certificate, so you will see **"Unknown publisher"** and a SmartScreen
+*"Windows protected your PC"* warning — click **More info → Run anyway** to
+install. The signature still guarantees the file hasn't been altered since it
+was built.
+
+**To get rid of the warning when running locally, create your own certificate,
+self-sign, and rebuild locally:**
+
+```powershell
+# 1. Create your own code-signing cert (once; no admin needed).
+#    Installs it into your CurrentUser Trusted Root + Trusted Publishers stores
+#    and saves the .pfx + password in %LOCALAPPDATA%\opendev-signing\.
+powershell -NoProfile -File scripts\new-signing-cert.ps1
+
+# 2. Load it for this shell (the leading dot is required) and rebuild.
+. .\scripts\win-sign-env.ps1
+npm run dist:win
+
+# 3. Install the freshly built, self-signed installer.
+.\dist\"OpenDev IDE-<version>-x64.exe"
+```
+
+Because the certificate is now trusted on *your* machine, Windows shows your
+certificate as the publisher and the signature validates. SmartScreen is
+reputation-based and may still warn about a brand-new file; only a purchased
+OV/EV certificate removes that for everyone.
+
 CI (`.github/workflows/build.yml`) builds the same installer on a
 `windows-latest` runner:
 
@@ -300,7 +332,7 @@ Electron app: **main** process owns workspace state, subprocess management (Type
 
 ## Known gaps
 
-- **Self-signed only.** Builds have a stable signer identity, but SmartScreen will warn until an OV/EV certificate is used.
+- **Self-signed dev certificate only.** Published builds show "Unknown publisher" / SmartScreen warnings; create your own cert and rebuild locally to remove it on your machine (see [About the signature](#about-the-signature-on-published-builds)). An OV/EV certificate is the only fix for everyone.
 - **No app icon** yet (`build/icon.ico`).
 - **No arm64 build**; Windows-on-ARM runs x64 under emulation.
 - **MLX-LM** training is macOS-only.
