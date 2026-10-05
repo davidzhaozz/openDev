@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import type { SavedLogin } from '../../../shared/types';
+import type { BrowserClock, SavedLogin } from '../../../shared/types';
 import {
   CANCEL_LOGIN_SCRIPT,
   DRAIN_LOGIN_SCRIPT,
@@ -128,6 +128,176 @@ function originOf(raw: string): string | null {
 }
 
 type LoginCapture = { url: string; username: string; password: string };
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const fmtDate = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const fmtTime = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+
+/** "2026-12-31" or "12/31/2026" → [y, m0, d], or null. */
+function parseDate(raw: string): [number, number, number] | null {
+  const s = raw.trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  let y: number, mo: number, d: number;
+  if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s))) { mo = +m[1]; d = +m[2]; y = +m[3]; }
+  else return null;
+  const t = new Date(y, mo - 1, d);
+  // Rejects 2026-02-30 and friends, which Date would quietly roll over.
+  return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d ? [y, mo - 1, d] : null;
+}
+
+/** "23:59", "11:59:30 pm", "9am" → [h, m, s], or null. */
+function parseTime(raw: string): [number, number, number] | null {
+  const m = /^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*([ap])?\.?m?\.?$/i.exec(raw.trim());
+  if (!m) return null;
+  let h = +m[1];
+  const min = +(m[2] ?? 0), sec = +(m[3] ?? 0);
+  if (m[4]) {
+    if (h < 1 || h > 12) return null;
+    h = (h % 12) + (m[4].toLowerCase() === 'p' ? 12 : 0);
+  }
+  return h < 24 && min < 60 && sec < 60 ? [h, min, sec] : null;
+}
+
+/** Same day-of-month n months on, clamped (Jan 31 + 1 month = Feb 28/29). */
+function addMonths(ms: number, n: number): number {
+  const d = new Date(ms);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return d.getTime();
+}
+
+const HOUR = 3600_000, DAY = 24 * HOUR;
+const JUMPS: { label: string; to: (ms: number) => number }[] = [
+  { label: '−1 day', to: ms => ms - DAY },
+  { label: '−1 hr', to: ms => ms - HOUR },
+  { label: '+1 hr', to: ms => ms + HOUR },
+  { label: '+1 day', to: ms => ms + DAY },
+  { label: '+1 week', to: ms => ms + 7 * DAY },
+  { label: '+1 month', to: ms => addMonths(ms, 1) }
+];
+
+/**
+ * The date and time pages in the browser see. The button reads the page's
+ * time; clicking it drops down a small editor — type a date and time, or jump
+ * by an hour / day / week / month. Changes apply at once, live, to every
+ * browser panel (the clock lives in the main process — see browserClock.ts).
+ */
+function ClockButton() {
+  const showToast = useStore(s => s.showToast);
+  const [clock, setClock] = useState<BrowserClock | null>(null);
+  /** Real ms when `clock` was read, so the label can run on from it. */
+  const readAt = useRef(0);
+  const [open, setOpen] = useState(false);
+  const [dateText, setDateText] = useState('');
+  const [timeText, setTimeText] = useState('');
+  const [error, setError] = useState('');
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const [, setTick] = useState(0);
+
+  const take = (c: BrowserClock) => { readAt.current = Date.now(); setClock(c); };
+  const pageNow = () => !clock ? Date.now()
+    : clock.frozen ? clock.now : clock.now + (Date.now() - readAt.current);
+  const fill = (ms: number) => { const d = new Date(ms); setDateText(fmtDate(d)); setTimeText(fmtTime(d)); setError(''); };
+
+  useEffect(() => {
+    // Re-read now and then: it moves the label on, and picks up a change
+    // made from another browser panel.
+    const read = () => window.opendev.browser.getClock().then(take).catch(() => setTick(n => n + 1));
+    read();
+    const t = setInterval(read, 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // While open: tick the readout every second, and close on a click
+  // elsewhere, Escape, or focus leaving for the page.
+  useEffect(() => {
+    if (!open) return;
+    const t = setInterval(() => setTick(n => n + 1), 1000);
+    const onDown = (e: MouseEvent) => { if (!rootRef.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onBlur = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [open]);
+
+  const toggle = async () => {
+    if (open) { setOpen(false); return; }
+    const c = await window.opendev.browser.getClock().catch(() => null);
+    if (c) take(c);
+    fill(c?.now ?? Date.now());
+    setOpen(true);
+  };
+
+  const setTo = async (at: number) => {
+    const c = await window.opendev.browser.setClock({ at, frozen: false });
+    take(c);
+    fill(c.now);
+  };
+
+  const applyTyped = () => {
+    const d = parseDate(dateText);
+    if (!d) { setError('Date: use 2026-12-31 or 12/31/2026'); return; }
+    const t = parseTime(timeText);
+    if (!t) { setError('Time: use 23:59, 23:59:30 or 11:59 pm'); return; }
+    setTo(new Date(d[0], d[1], d[2], t[0], t[1], t[2]).getTime());
+  };
+
+  const reset = async () => {
+    const c = await window.opendev.browser.setClock(null);
+    take(c);
+    fill(c.now);
+    showToast('Browser clock is back to real time.', 2000);
+  };
+
+  const fake = !!clock?.fake;
+  const label = new Date(pageNow()).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
+  });
+  const onEnter = (e: { key: string }) => { if (e.key === 'Enter') applyTyped(); };
+  return (
+    <span className="clock-btn" ref={rootRef}>
+      <button
+        className={fake || open ? 'picking' : undefined}
+        title={fake ? `Pages see ${new Date(pageNow()).toLocaleString()}` : 'Change the date and time pages in this browser see'}
+        onClick={toggle}
+      >🕒 {fake ? label : 'Real time'}</button>
+      {fake && <button title="Reset to the current time" onClick={reset}>↺</button>}
+      {open && (
+        <div className="clock-pop">
+          <div className="clock-now">
+            Page sees <b>{new Date(pageNow()).toLocaleString(undefined, {
+              weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+              hour: 'numeric', minute: '2-digit', second: '2-digit'
+            })}</b>{fake ? '' : ' (real time)'}
+          </div>
+          <div className="clock-row">
+            <label>Date <input value={dateText} onChange={e => setDateText(e.target.value)} onKeyDown={onEnter} placeholder="2026-12-31" autoFocus /></label>
+            <label>Time <input value={timeText} onChange={e => setTimeText(e.target.value)} onKeyDown={onEnter} placeholder="23:59:00" /></label>
+            <button className="clock-primary" onClick={applyTyped}>Set</button>
+          </div>
+          {error && <div className="clock-err">{error}</div>}
+          <div className="clock-row">
+            {JUMPS.map(j => <button key={j.label} onClick={() => setTo(j.to(pageNow()))}>{j.label}</button>)}
+          </div>
+          <div className="clock-row">
+            <span className="clock-hint">Applies live; reload if the page only reads the time at startup.</span>
+            <button className="clock-reset" onClick={reset} disabled={!fake}>↺ Reset to current time</button>
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
 
 export function BrowserPanel({ initialUrl, onNavigate }: { initialUrl?: string; onNavigate?: (u: string) => void }) {
   // The webview's `src` is only its first page. Changing the attribute later
@@ -418,6 +588,7 @@ export function BrowserPanel({ initialUrl, onNavigate }: { initialUrl?: string; 
             : 'Saved logins'}
           onClick={() => setShowLogins(v => !v)}
         >🔑{originLogins.length > 1 ? ` ${originLogins.length}` : ''}</button>
+        <ClockButton />
         <select
           className="device-select"
           value={presetId}

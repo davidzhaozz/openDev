@@ -773,6 +773,13 @@ export type ClaudeLoginEvent =
   | { kind: 'url'; url: string }
   | { kind: 'done'; code: number; status: ClaudeAuthStatus };
 
+/** The clock pages in the browser panel see. `now` is its reading at the time of the call. */
+export type BrowserClock = {
+  fake: boolean;
+  now: number;
+  frozen: boolean;
+};
+
 /** A saved browser login, as shown in a list — never carries the password. */
 export type SavedLogin = {
   id: string;

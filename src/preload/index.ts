@@ -9,6 +9,7 @@ import type {
   AddPackageArgs,
   AddPackageResult,
   AppSettings,
+  BrowserClock,
   InstallableTool,
   PasswordStoreStatus,
   QueryHistoryEntry,
@@ -263,7 +264,11 @@ const api = {
   },
   browser: {
     screenshot: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> =>
-      ipcRenderer.invoke(IPC.BrowserScreenshotRect, rect)
+      ipcRenderer.invoke(IPC.BrowserScreenshotRect, rect),
+    /** The fake clock pages in the browser panel see; null goes back to real time. */
+    getClock: (): Promise<BrowserClock> => ipcRenderer.invoke(IPC.BrowserClockGet),
+    setClock: (opts: { at: number; frozen: boolean } | null): Promise<BrowserClock> =>
+      ipcRenderer.invoke(IPC.BrowserClockSet, opts)
   },
   services: {
     list: (): Promise<ServiceDef[]> => ipcRenderer.invoke(IPC.ServicesList),

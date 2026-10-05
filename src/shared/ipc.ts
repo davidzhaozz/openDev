@@ -75,6 +75,9 @@ export const IPC = {
   // browser
   BrowserScreenshotRect: 'browser:screenshot-rect',
   BrowserPicked: 'browser:picked',
+  BrowserClockGet: 'browser:clock-get',
+  BrowserClockSet: 'browser:clock-set',
+  BrowserClockSync: 'browser:clock-sync',
 
   // services
   ServicesList: 'services:list',

@@ -14,6 +14,7 @@ import { registerDbIpc } from './db.js';
 import { registerGitIpc } from './git.js';
 import { registerTerminalIpc } from './term.js';
 import { registerBrowserIpc } from './browser.js';
+import { registerBrowserClockIpc } from './browserClock.js';
 import { registerPasswordsIpc } from './passwords.js';
 import { startIdeMcpServer, registerMcpIpc } from './mcp.js';
 import { registerSessionIpc } from './session.js';
@@ -94,6 +95,7 @@ export function registerIpc() {
   registerGitIpc();
   registerTerminalIpc();
   registerBrowserIpc();
+  registerBrowserClockIpc();
   registerPasswordsIpc();
   registerSessionIpc();
   registerToolsIpc();
