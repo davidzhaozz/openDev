@@ -33,7 +33,7 @@ import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
 import { listBrowserTokens, scanBrowserStorage } from './browserTokens.js';
-import { captureBrowser, modelImage } from './browser.js';
+import { captureBrowser, modelImage, reloadBrowserTabs } from './browser.js';
 import { dbApi } from './db.js';
 import { mlxServer } from './localModels.js';
 import { listLocalModels } from './aiLocal.js';
@@ -176,6 +176,13 @@ const TOOLS: ToolDef[] = [
       url: { type: 'string', description: 'Open this URL in a new browser tab and capture it (e.g. "http://localhost:3000/settings").' },
       fullPage: { type: 'boolean', description: 'Capture the whole scrollable page instead of just the visible viewport (default false).' },
       waitMs: { type: 'number', description: 'Extra wait after the page loads, for content that renders late (max 15000).' }
+    } } },
+  { name: 'ide_browser_refresh', description: 'Reload browser tabs already open in the IDE browser panel and wait for them to finish loading — e.g. after changing code a page in the panel shows. '
+    + 'Without arguments it reloads the browser tab the user has in front (else the last one opened). With match it reloads every tab whose current URL or title contains that text; with all:true, every browser tab. '
+    + 'Does not open new tabs (use ide_browser_screenshot with url for that). Returns each reloaded tab\'s URL, title and any load error.', inputSchema: { type: 'object', properties: {
+      match: { type: 'string', description: 'Reload the tabs whose current URL or title contains this text, case-insensitive (e.g. "localhost:3000").' },
+      all: { type: 'boolean', description: 'Reload every open browser tab (default false).' },
+      hard: { type: 'boolean', description: 'Bypass the cache, like Ctrl+Shift+R (default false).' }
     } } },
   { name: 'ide_rest_delete', description: 'Delete a saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'ide_rest_open_saved', description: 'Open a saved REST request in the center workspace, optionally sending it immediately. Use with id from ide_rest_list_saved.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, send: { type: 'boolean', description: 'If true, fire the request as soon as it loads.' } }, required: ['id'] } },
@@ -529,6 +536,16 @@ async function callTool(name: string, args: any): Promise<ToolResult> {
         ];
         if (shot.loadError) lines.push(`Warning: the page failed to load — ${shot.loadError}`);
         return { content: [{ type: 'image', ...modelImage(shot.png) }, { type: 'text', text: lines.join('\n') }] };
+      }
+      case 'ide_browser_refresh': {
+        const tabs = await reloadBrowserTabs({
+          match: args?.match ? String(args.match) : undefined,
+          all: !!args?.all,
+          hard: !!args?.hard
+        });
+        return ok(`Reloaded ${tabs.length} tab(s)${args?.hard ? ' (cache bypassed)' : ''}:\n` + tabs.map((t) =>
+          `- [${t.name}] ${t.title ? `"${t.title}" — ` : ''}${t.url}${t.loadError ? `\n  Warning: the page failed to load — ${t.loadError}` : ''}`
+        ).join('\n'));
       }
       case 'ide_rest_delete': {
         const id = String(args?.id ?? '');

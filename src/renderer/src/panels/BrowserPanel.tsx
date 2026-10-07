@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import type { BrowserClock, SavedLogin } from '../../../shared/types';
+import type { BrowserClock, BrowserReloadResult, SavedLogin } from '../../../shared/types';
 import {
   CANCEL_LOGIN_SCRIPT,
   DRAIN_LOGIN_SCRIPT,
@@ -311,6 +311,38 @@ export function requestBrowserCapture(tabId: string, reqId: string): void {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// Reloads for the AI (ide_browser_refresh). Each mounted panel registers
+// itself by tab id; reloadBrowserTabs picks the tabs and drives them.
+type ReloadedTab = NonNullable<BrowserReloadResult['tabs']>[number];
+type LivePanel = { url: () => string; title: () => string; reload: (hard: boolean) => Promise<Omit<ReloadedTab, 'name'>> };
+const livePanels = new Map<string, LivePanel>();
+
+export async function reloadBrowserTabs(opts: { match?: string; all?: boolean; hard?: boolean }): Promise<BrowserReloadResult> {
+  const st = useStore.getState();
+  const tabs = st.centerTabs.filter(t => t.kind === 'browser' && livePanels.has(t.id));
+  if (!tabs.length) return { error: 'No browser tab is open in the IDE. Open one with ide_browser_screenshot and a url.' };
+  const describe = (id: string) => {
+    const p = livePanels.get(id)!;
+    try { return `${p.url()} ${p.title()}`; } catch { return ''; }
+  };
+  let picked = tabs;
+  if (opts.match) {
+    const needle = opts.match.toLowerCase();
+    picked = tabs.filter(t => describe(t.id).toLowerCase().includes(needle) || t.name.toLowerCase().includes(needle));
+    if (!picked.length) {
+      return { error: `No browser tab matches "${opts.match}". Open tabs:\n${tabs.map(t => `- [${t.name}] ${livePanels.get(t.id)!.url()}`).join('\n')}` };
+    }
+  } else if (!opts.all) {
+    const active = tabs.find(t => t.id === st.activeCenterId);
+    picked = [active ?? tabs[tabs.length - 1]];
+  }
+  const results = await Promise.all(picked.map(async (t) => {
+    try { return { name: t.name, ...(await livePanels.get(t.id)!.reload(!!opts.hard)) }; }
+    catch (e: any) { return { name: t.name, url: '', title: '', loadError: String(e?.message ?? e) }; }
+  }));
+  return { tabs: results };
+}
+
 export function BrowserPanel({ initialUrl, onNavigate, tabId }: { initialUrl?: string; onNavigate?: (u: string) => void; tabId?: string }) {
   // The webview's `src` is only its first page. Changing the attribute later
   // starts a navigation of its own, so every later load goes through
@@ -428,6 +460,45 @@ export function BrowserPanel({ initialUrl, onNavigate, tabId }: { initialUrl?: s
     window.addEventListener(CAPTURE_EVENT, onRequest);
     void answer();
     return () => { alive = false; window.removeEventListener(CAPTURE_EVENT, onRequest); };
+  }, [tabId]);
+
+  // Reload on the AI's behalf and resolve once the page has loaded (or failed).
+  useEffect(() => {
+    if (!tabId) return;
+    livePanels.set(tabId, {
+      url: () => wvRef.current?.getURL?.() || '',
+      title: () => wvRef.current?.getTitle?.() || '',
+      reload: (hard) => new Promise((resolve, reject) => {
+        const wv = wvRef.current;
+        try { if (!wv?.getWebContentsId?.()) throw new Error(); }
+        catch { reject(new Error('The browser tab has not finished attaching.')); return; }
+        let failed: string | undefined;
+        const onFail = (e: any) => {
+          if (!e.isMainFrame || e.errorCode === -3) return;
+          failed = `${e.validatedURL || ''}: ${e.errorDescription || 'Load failed'} (${e.errorCode})`;
+        };
+        const done = () => {
+          clearTimeout(timer);
+          wv.removeEventListener('did-fail-load', onFail);
+          wv.removeEventListener('did-stop-loading', done);
+          let url = '', title = '';
+          try { url = wv.getURL(); title = wv.getTitle(); } catch { /* detached */ }
+          resolve({ url, title, loadError: failed });
+        };
+        const timer = setTimeout(() => { failed = failed ?? 'Still loading after 30s.'; done(); }, 30_000);
+        wv.addEventListener('did-fail-load', onFail);
+        wv.addEventListener('did-stop-loading', done);
+        // As with the Reload button: on an error page, retry the address that failed.
+        const errUrl = loadErrorRef.current?.url;
+        try {
+          if (errUrl) loadInWebview(errUrl);
+          else if (hard) wv.reloadIgnoringCache();
+          else wv.reload();
+        } catch (e: any) { failed = String(e?.message ?? e); done(); }
+      })
+    });
+    return () => { livePanels.delete(tabId); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId]);
 
   const reload = () => {

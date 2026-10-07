@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { IPC } from '@shared/ipc';
+import type { BrowserReloadResult } from '@shared/types';
 import { getMainWindow } from './index.js';
 import { safeSend } from './safeSend.js';
 import { workspace } from './workspace.js';
@@ -22,6 +23,37 @@ export function registerBrowserIpc() {
     p.resolve(res);
     return true;
   });
+  ipcMain.handle(IPC.BrowserReloadDone, (_e, reqId: string, res: BrowserReloadResult) => {
+    const p = pendingReloads.get(reqId);
+    if (!p) return false;
+    pendingReloads.delete(reqId);
+    clearTimeout(p.timer);
+    p.resolve(res);
+    return true;
+  });
+}
+
+/* ---------------------------------------------------- AI browser reloads */
+
+// ide_browser_refresh. The renderer knows the tabs and their live URLs, so it
+// picks which to reload, reloads them and answers once they have loaded.
+
+const pendingReloads = new Map<string, { resolve: (r: BrowserReloadResult) => void; timer: NodeJS.Timeout }>();
+
+export async function reloadBrowserTabs(opts: { match?: string; all?: boolean; hard?: boolean } = {}): Promise<NonNullable<BrowserReloadResult['tabs']>> {
+  if (!getMainWindow()) throw new Error('The IDE window is not open, so there is no browser panel to reload.');
+  if (!workspace.getRoot()) throw new Error('No project is open in the IDE, so there is no browser panel. Open a project first.');
+  const reqId = randomUUID();
+  const res = await new Promise<BrowserReloadResult>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingReloads.delete(reqId);
+      resolve({ error: 'The browser tabs did not finish reloading within 40s.' });
+    }, 40_000);
+    pendingReloads.set(reqId, { resolve, timer });
+    safeSend('mcp:command', { kind: 'browser-reload', reqId, match: opts.match, all: !!opts.all, hard: !!opts.hard });
+  });
+  if (res.error) throw new Error(res.error);
+  return res.tabs ?? [];
 }
 
 /* ------------------------------------------------- AI browser screenshots */

@@ -14,7 +14,7 @@ import { InstallNodePrompt } from './components/InstallNodePrompt';
 import { ServicesPanel } from './panels/ServicesPanel';
 import { AIChat } from './panels/AIChat';
 import { ConversationsList } from './panels/ConversationsList';
-import { BrowserPanel, requestBrowserCapture } from './panels/BrowserPanel';
+import { BrowserPanel, reloadBrowserTabs, requestBrowserCapture } from './panels/BrowserPanel';
 import { DiffWorkspace } from './panels/DiffWorkspace';
 import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
@@ -478,6 +478,11 @@ export default function App() {
         } else {
           requestBrowserCapture(tabId, reqId);
         }
+      } else if (cmd?.kind === 'browser-reload') {
+        const { reqId, match, all, hard } = cmd as unknown as { reqId: string; match?: string; all?: boolean; hard?: boolean };
+        void reloadBrowserTabs({ match, all, hard })
+          .catch((e: any) => ({ error: String(e?.message ?? e) }))
+          .then(res => window.opendev.browser.reloadDone(reqId, res));
       }
     };
     const off = (window.opendev as any).mcp?.onCommand?.(handler);

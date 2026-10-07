@@ -802,6 +802,12 @@ export type BrowserClock = {
   frozen: boolean;
 };
 
+/** What reloading browser-panel tabs for the AI (ide_browser_refresh) came to. */
+export type BrowserReloadResult = {
+  tabs?: { name: string; url: string; title: string; loadError?: string }[];
+  error?: string;
+};
+
 /** A saved browser login, as shown in a list — never carries the password. */
 export type SavedLogin = {
   id: string;

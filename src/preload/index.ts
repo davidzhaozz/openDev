@@ -11,6 +11,7 @@ import type {
   AppSettings,
   SlackStatus,
   BrowserClock,
+  BrowserReloadResult,
   InstallableTool,
   PasswordStoreStatus,
   QueryHistoryEntry,
@@ -269,6 +270,9 @@ const api = {
     /** Answers the main process's request to screenshot a browser tab (ide_browser_screenshot). */
     captureReady: (reqId: string, res: { webContentsId?: number; loadError?: string; error?: string }): Promise<boolean> =>
       ipcRenderer.invoke(IPC.BrowserCaptureReady, reqId, res),
+    /** Answers the main process's request to reload browser tabs (ide_browser_refresh). */
+    reloadDone: (reqId: string, res: BrowserReloadResult): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.BrowserReloadDone, reqId, res),
     /** The fake clock pages in the browser panel see; null goes back to real time. */
     getClock: (): Promise<BrowserClock> => ipcRenderer.invoke(IPC.BrowserClockGet),
     setClock: (opts: { at: number; frozen: boolean } | null): Promise<BrowserClock> =>
