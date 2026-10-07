@@ -218,7 +218,14 @@ export const systemPreferences = {
 // only the IDE's own fetch traffic is captured — which is the half the web
 // client can actually see anyway.
 export const webContents = {
-  getAllWebContents: () => [] as Array<{ id: number; getType(): string }>
+  getAllWebContents: () => [] as Array<{ id: number; getType(): string }>,
+  fromId: (_id: number) => undefined
+};
+
+// Only the AI's browser screenshots use it, and they stop earlier (no main
+// window here).
+export const nativeImage = {
+  createFromBuffer: () => { throw new Error('nativeImage is not available in the web build'); }
 };
 
 // No browser panel in the web build, so no cookie jar to borrow from.

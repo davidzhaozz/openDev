@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs, existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { IPC } from '@shared/ipc';
 import type { AiActivityMsg, ChatAttachment, ChatMessage, Conversation } from '@shared/types';
 import { loadSettings } from './storage.js';
@@ -79,6 +80,16 @@ const AI_FLUSH_MS = 33;
 type AiStreamMsg = { streamId: string; chunk?: string; done: boolean; full?: string };
 const pendingChunks = new Map<string, { text: string; timer: NodeJS.Timeout }>();
 
+// Turn lifecycle for listeners inside the main process — the Slack bridge
+// relays a turn's tool activity and final reply, and notifies when a long
+// turn started in the IDE finishes. 'activity' carries an AiActivityMsg;
+// 'done' carries an AiTurnDone. Every turn ends through sendAiStream with
+// done:true (errors and cancels included), so 'done' fires exactly once.
+export type AiTurnOrigin = 'ide' | 'slack';
+export type AiTurnDone = { streamId: string; conversationId: string; title: string; origin: AiTurnOrigin; startedAt: number; full: string };
+export const aiTurnEvents = new EventEmitter();
+const turnMeta = new Map<string, Omit<AiTurnDone, 'streamId' | 'full'>>();
+
 function flushAiStream(streamId: string): void {
   const p = pendingChunks.get(streamId);
   if (!p) return;
@@ -96,6 +107,11 @@ function sendAiStream(msg: AiStreamMsg): void {
   }
   flushAiStream(msg.streamId);
   safeSend(IPC.AiStream, msg);
+  const meta = msg.done ? turnMeta.get(msg.streamId) : undefined;
+  if (meta) {
+    turnMeta.delete(msg.streamId);
+    aiTurnEvents.emit('done', { streamId: msg.streamId, full: msg.full ?? '', ...meta } satisfies AiTurnDone);
+  }
 }
 
 // Activity log: what each tool call is acting on, on its own channel so the
@@ -123,6 +139,7 @@ function sniffToolTarget(partialJson: string): string | undefined {
 
 function sendAiActivity(msg: AiActivityMsg): void {
   safeSend(IPC.AiActivity, msg);
+  aiTurnEvents.emit('activity', msg);
 }
 
 // Summaries for the sidebar list, which polls this every few seconds. A full
@@ -174,7 +191,10 @@ async function saveConversation(c: Conversation): Promise<void> {
   await fs.writeFile(p, JSON.stringify(c, null, 2), 'utf8');
 }
 
-type IdeContext = {
+export type IdeContext = {
+  // Set when the turn came in from the Slack bridge: the user is away from
+  // the IDE and sees nothing but the text reply.
+  remote?: 'slack';
   workspaceRoot?: string;
   activeTab?: { kind: string; name: string; path?: string; contentPreview?: string } | null;
   openTabs?: Array<{ kind: string; name: string; path?: string; active?: boolean }>;
@@ -183,6 +203,13 @@ type IdeContext = {
 function buildIdeContextBlock(ctx: IdeContext | undefined): string {
   if (!ctx) return '';
   const lines: string[] = ['<ide-context>'];
+  if (ctx.remote === 'slack') {
+    lines.push('channel: this message was sent from Slack. The user is away from the IDE and sees only your final text reply there —');
+    lines.push('not the panels, diffs, or tabs. Do the work with your tools as usual, then reply concisely and state the results');
+    lines.push('(what changed, what ran, what failed) instead of pointing at IDE panels.');
+    lines.push('To show a page, take it with ide_browser_screenshot and put `[[attach: <path it returned>]]` on a line of its own in');
+    lines.push('your reply; the image is uploaded to the Slack thread. Any image file (png, jpg, gif, webp) in the workspace works too.');
+  }
   if (ctx.workspaceRoot) lines.push(`workspace: ${ctx.workspaceRoot}`);
   if (ctx.openTabs && ctx.openTabs.length) {
     lines.push('open tabs:');
@@ -436,6 +463,17 @@ async function streamViaClaudeSdk(streamId: string, text: string, conv: Conversa
   await saveConversation(conv);
 }
 
+// claude.ai connector tools that send, publish, or destroy as the user. Exact
+// names — the CLI's tool rules don't take wildcards inside a server.
+const OUTBOUND_CONNECTOR_TOOLS = [
+  ...['send_message', 'schedule_message', 'create_conversation', 'create_canvas', 'update_canvas',
+    'create_list', 'update_list', 'add_list_record', 'update_list_record', 'add_reaction',
+    'get_file_upload_url', 'complete_file_upload'].map((t) => `mcp__claude_ai_Slack__slack_${t}`),
+  ...['send_mail', 'send_draft', 'forward_mail', 'batch_delete_messages', 'batch_modify_labels', 'trash_thread',
+    'create_filter', 'delete_filter', 'set_vacation', 'create_event', 'update_event',
+    'delete_event', 'respond_to_event'].map((t) => `mcp__claude_ai_Microsoft_365__outlook_${t}`)
+];
+
 async function streamViaClaudeCli(streamId: string, text: string, conv: Conversation, opts: { model?: string; effort?: string } = {}): Promise<void> {
   const settings = await loadSettings();
   const configuredBin = settings.claudeCliPath || 'claude';
@@ -483,7 +521,14 @@ async function streamViaClaudeCli(streamId: string, text: string, conv: Conversa
     // Disallow the interactive question/permission tools — in headless
     // `-p` mode they have nowhere to surface and would hang the run.
     // The system prompt tells the model to ask via plain text instead.
-    '--disallowedTools', 'AskUserQuestion',
+    //
+    // Unless Settings → AI allows it, also the claude.ai connector tools that
+    // act as the user outside the IDE (send mail or Slack messages, forward,
+    // delete, change the calendar). The chat reads email and Slack, and text
+    // it reads can carry instructions; with approvals bypassed, that text
+    // must not be able to send or destroy anything. Reading, searching and
+    // drafting stay available. One comma-joined value: the flag is variadic.
+    '--disallowedTools', ['AskUserQuestion', ...(settings.aiAllowOutbound ? [] : OUTBOUND_CONNECTOR_TOOLS)].join(','),
     // The IDE's own MCP server (REST tab, browser tokens, DB, services…), so
     // the chat can drive the IDE and not just the files. Dynamic import: mcp.ts
     // reaches agents.ts, which would close a static cycle back to here.
@@ -1117,6 +1162,90 @@ async function streamViaOpenCodeCli(streamId: string, text: string, conv: Conver
   await saveConversation(conv);
 }
 
+export type AiSendArgs = {
+  conversationId?: string;
+  text: string;
+  attachments?: ChatAttachment[];
+  transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli';
+  context?: IdeContext;
+  model?: string;
+  effort?: string;
+};
+
+// One chat turn: append the user message, start the provider stream, and
+// return at once — the reply arrives on IPC.AiStream (and aiTurnEvents).
+// Shared by the chat panel's IPC call and the Slack bridge.
+export async function startAiTurn(args: AiSendArgs, origin: AiTurnOrigin = 'ide'): Promise<{ conversationId: string; streamId: string }> {
+  let conv: Conversation | null = null;
+  if (args.conversationId) {
+    // Best effort. If the file is gone (deleted from another window,
+    // workspace switch race, on-disk cleanup, …) fall through to a fresh
+    // conversation rather than failing the send — the renderer picks up
+    // the new id from the return value.
+    conv = await loadConversation(args.conversationId);
+    if (!conv) console.warn(`[ai:send] stale conversationId ${args.conversationId} — starting new conversation`);
+  }
+  if (!conv) {
+    conv = {
+      id: randomUUID(),
+      title: args.text.slice(0, 60) || 'New conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+      workspaceRoot: workspace.getRoot()
+    };
+  }
+  conv.messages.push({
+    id: randomUUID(),
+    role: 'user',
+    text: args.text,
+    attachments: args.attachments,
+    createdAt: Date.now()
+  });
+  await saveConversation(conv);
+  const streamId = randomUUID();
+  // Map legacy values "sdk"/"cli" to the claude defaults.
+  const raw = args.transport || 'claude-cli';
+  const transport: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' =
+    raw === 'sdk' ? 'claude-sdk' : raw === 'cli' ? 'claude-cli' : raw;
+  // First turn = include the IDE convention instructions (design-proposals
+  // format, follow-up Q&A behavior). Resumed turns don't need them
+  // re-sent — they're already in the model's context.
+  const isFirstTurn = !conv.claudeSessionId;
+  const prompt = buildPrompt(conv.messages.slice(0, -1), args.attachments, args.text, args.context, isFirstTurn);
+  // Before the run starts, so even an immediate failure reports its turn.
+  turnMeta.set(streamId, { conversationId: conv.id, title: conv.title, origin, startedAt: Date.now() });
+  const run = (() => {
+    if (transport === 'claude-cli') return () => streamViaClaudeCli(streamId, prompt, conv, { model: args.model, effort: args.effort });
+    if (transport === 'openai-sdk') return () => streamViaOpenAiSdk(streamId, prompt, conv, args.attachments);
+    if (transport === 'codex-cli') return () => streamViaCodexCli(streamId, prompt, conv);
+    if (transport === 'opencode-cli') return () => streamViaOpenCodeCli(streamId, args.text, conv);
+    return () => streamViaClaudeSdk(streamId, prompt, conv, args.attachments);
+  })();
+  run().catch((err) => {
+    sendAiStream( {
+      streamId,
+      chunk: `\n[error] ${err.message}\n`,
+      done: true,
+      full: ''
+    });
+  });
+  return { conversationId: conv.id, streamId };
+}
+
+export function cancelAiTurn(streamId: string): boolean {
+  const s = activeStreams.get(streamId);
+  if (!s) return false;
+  if ('abort' in s) (s as AbortController).abort();
+  // Stop has to take the whole tree. `kill()` reaches only the CLI itself,
+  // leaving whatever it had spawned (a build, a test run) still running and
+  // still holding the stdio pipes — so the run kept going invisibly and the
+  // turn was never saved.
+  else void killTree((s as ChildProcess).pid ?? 0, true);
+  activeStreams.delete(streamId);
+  return true;
+}
+
 export function registerAiIpc() {
   ipcMain.handle(IPC.AiConversations, () => listConversations());
   ipcMain.handle(IPC.AiConversationGet, (_e, id: string) => loadConversation(id));
@@ -1141,82 +1270,9 @@ export function registerAiIpc() {
     return true;
   });
 
-  ipcMain.handle(IPC.AiSend, async (_e, args: {
-    conversationId?: string;
-    text: string;
-    attachments?: ChatAttachment[];
-    transport?: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' | 'sdk' | 'cli';
-    context?: IdeContext;
-    model?: string;
-    effort?: string;
-  }) => {
-    let conv: Conversation | null = null;
-    if (args.conversationId) {
-      // Best effort. If the file is gone (deleted from another window,
-      // workspace switch race, on-disk cleanup, …) fall through to a fresh
-      // conversation rather than failing the send — the renderer picks up
-      // the new id from the return value.
-      conv = await loadConversation(args.conversationId);
-      if (!conv) console.warn(`[ai:send] stale conversationId ${args.conversationId} — starting new conversation`);
-    }
-    if (!conv) {
-      conv = {
-        id: randomUUID(),
-        title: args.text.slice(0, 60) || 'New conversation',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        messages: [],
-        workspaceRoot: workspace.getRoot()
-      };
-    }
-    conv.messages.push({
-      id: randomUUID(),
-      role: 'user',
-      text: args.text,
-      attachments: args.attachments,
-      createdAt: Date.now()
-    });
-    await saveConversation(conv);
-    const streamId = randomUUID();
-    // Map legacy values "sdk"/"cli" to the claude defaults.
-    const raw = args.transport || 'claude-cli';
-    const transport: 'claude-sdk' | 'claude-cli' | 'openai-sdk' | 'codex-cli' | 'opencode-cli' =
-      raw === 'sdk' ? 'claude-sdk' : raw === 'cli' ? 'claude-cli' : raw;
-    // First turn = include the IDE convention instructions (design-proposals
-    // format, follow-up Q&A behavior). Resumed turns don't need them
-    // re-sent — they're already in the model's context.
-    const isFirstTurn = !conv.claudeSessionId;
-    const prompt = buildPrompt(conv.messages.slice(0, -1), args.attachments, args.text, args.context, isFirstTurn);
-    const run = (() => {
-      if (transport === 'claude-cli') return () => streamViaClaudeCli(streamId, prompt, conv, { model: args.model, effort: args.effort });
-      if (transport === 'openai-sdk') return () => streamViaOpenAiSdk(streamId, prompt, conv, args.attachments);
-      if (transport === 'codex-cli') return () => streamViaCodexCli(streamId, prompt, conv);
-      if (transport === 'opencode-cli') return () => streamViaOpenCodeCli(streamId, args.text, conv);
-      return () => streamViaClaudeSdk(streamId, prompt, conv, args.attachments);
-    })();
-    run().catch((err) => {
-      sendAiStream( {
-        streamId,
-        chunk: `\n[error] ${err.message}\n`,
-        done: true,
-        full: ''
-      });
-    });
-    return { conversationId: conv.id, streamId };
-  });
+  ipcMain.handle(IPC.AiSend, (_e, args: AiSendArgs) => startAiTurn(args));
 
-  ipcMain.handle(IPC.AiCancel, (_e, streamId: string) => {
-    const s = activeStreams.get(streamId);
-    if (!s) return false;
-    if ('abort' in s) (s as AbortController).abort();
-    // Stop has to take the whole tree. `kill()` reaches only the CLI itself,
-    // leaving whatever it had spawned (a build, a test run) still running and
-    // still holding the stdio pipes — so the run kept going invisibly and the
-    // turn was never saved.
-    else void killTree((s as ChildProcess).pid ?? 0, true);
-    activeStreams.delete(streamId);
-    return true;
-  });
+  ipcMain.handle(IPC.AiCancel, (_e, streamId: string) => cancelAiTurn(streamId));
 }
 
 // Quitting has to take the CLI children with it. They are plain spawned

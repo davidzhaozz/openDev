@@ -305,6 +305,7 @@ Open **Settings** (⌘ , on macOS, `Ctrl+,` on Windows):
 - **Claude CLI path** — optional; defaults to `claude` on PATH.
 - **OpenAI API key** + **Codex CLI path** — optional.
 - **Jira** — site, email and API token for the Jira panel.
+- **Slack** — talk to the IDE from a Slack DM (see below).
 - **Themes & font sizes.**
 
 These are saved to `settings.json` in openDev's folder (`~/Library/Application Support/openDev/` or `%APPDATA%\openDev\`) in plain text, so treat that file like any other credential file in your profile.
@@ -322,6 +323,38 @@ The IDE runs an HTTP MCP server on `127.0.0.1:53825`. Add it to your CLI's MCP c
 ```
 
 Settings shows the exact snippet; it is also written to `opendev-mcp.json` in Electron's userData folder (`~/Library/Application Support/OpenDev IDE/` on macOS, `%APPDATA%\OpenDev IDE\` on Windows).
+
+### Slack
+
+DM a Slack bot and the message runs in the IDE chat, with the same tools as typing in the AI panel: files, terminal,
+git, services, databases, REST, Jira and the editor. The reply comes back to the DM, with live progress while it works.
+The IDE also DMs you when an AI run started in the IDE takes over a minute, a service stops with an error, or a Jira
+ticket run finishes.
+
+1. **Settings → Slack → Copy manifest**, then at [api.slack.com/apps](https://api.slack.com/apps) choose
+   *Create New App → From a manifest*, pick your workspace, paste, and install the app.
+2. Paste the app-level token (*Basic Information → App-Level Tokens*, scope `connections:write`, `xapp-…`), the bot
+   token (*OAuth & Permissions*, `xoxb-…`) and your member ID (Slack profile → ⋯ → *Copy member ID*).
+3. Turn on **Connect to Slack** and press **Send test message**.
+
+It uses Socket Mode: the IDE connects out to Slack, so there is no public URL, tunnel or open port. The chat runs tools
+without asking, so the bridge acts **only on messages from your member ID**; anything else is dropped unanswered.
+
+In the DM, `help`, `status`, `stop`, `new`, `projects` and `project <n|name>` are commands (sent on their own);
+everything else goes to Claude. Each thread is its own conversation, and Slack conversations show up in the IDE's chat
+history like any other.
+
+**Screenshots.** The chat can screenshot the IDE's browser panel (the `ide_browser_screenshot` tool — the tab in front,
+or a URL it opens in a new tab; viewport or full page), so "show me localhost:3000/settings" in Slack comes back as an
+image in the thread. Uploading needs the `files:write` bot scope, which the manifest includes; an app created before
+it was added needs the scope added under *OAuth & Permissions* and a reinstall. Only images from the screenshot folder
+or the open project can be attached.
+
+**Reading your Slack and email.** The chat runs the Claude CLI signed in to your claude.ai account, so connectors you
+connect at claude.ai (Settings → Connectors — e.g. Slack, Microsoft 365) are available to it, and through it to the Slack
+bridge: "summarize #engineering since yesterday", "any unread email from Jane?". Connector tools that send, forward,
+delete or change your calendar are blocked unless **Settings → AI → Connectors: send and delete** is on; reading,
+searching and drafting always work.
 
 ### Database connections
 

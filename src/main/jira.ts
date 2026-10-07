@@ -786,11 +786,12 @@ async function spawnRun(id: string, boardPath: string): Promise<JiraTask | null>
       exitCode: code,
       lastLine: stopped ? 'stopped' : ok ? 'finished' : `exited with code ${code}`
     };
-    if (!ok) { await patchIn(board, id, base); return; }
+    if (!ok) { await patchIn(board, id, base); emitRunEnd({ ...task, ...base } as JiraTask); return; }
     await patchIn(board, id, { ...base, lastLine: 'posting to Jira…' });
     const current = (await readBoard(board)).find((t) => t.id === id) ?? task;
     const outcome = await report(current, text);
     await patchIn(board, id, { ...outcome, lastLine: outcome.reportError ? outcome.reportError : 'reported to Jira' });
+    emitRunEnd({ ...current, ...base, ...outcome } as JiraTask);
   };
   proc.on('close', (code, signal) => void finish(code, signal));
   proc.on('exit', (code, signal) => { setTimeout(() => void finish(code, signal), 3000); });
@@ -876,6 +877,20 @@ function dedupe(errors: string[], cap = 8): string[] {
 }
 
 /* --------------------------------------------------------------------- ipc */
+
+// Run-end listeners for other main-process modules (the Slack bridge
+// notifies when a ticket's run finishes). Called once per run, after any
+// Jira report has been posted.
+const runEndListeners = new Set<(t: JiraTask) => void>();
+export function onJiraRunEnd(cb: (t: JiraTask) => void): () => void {
+  runEndListeners.add(cb);
+  return () => runEndListeners.delete(cb);
+}
+function emitRunEnd(t: JiraTask): void {
+  for (const cb of runEndListeners) {
+    try { cb(t); } catch (e) { console.error('[jira] run-end listener threw', e); }
+  }
+}
 
 export function registerJiraIpc(): void {
   ipcMain.handle(IPC.JiraList, () => read());

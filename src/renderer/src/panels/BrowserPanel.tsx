@@ -299,7 +299,19 @@ function ClockButton() {
   );
 }
 
-export function BrowserPanel({ initialUrl, onNavigate }: { initialUrl?: string; onNavigate?: (u: string) => void }) {
+// Screenshot requests from the AI (ide_browser_screenshot), by tab id. Held
+// here rather than sent as an event because a tab opened for the request has
+// not mounted yet when it arrives; the panel takes it up on mount.
+const pendingCaptures = new Map<string, string>();
+const CAPTURE_EVENT = 'opendev:browser-capture';
+export function requestBrowserCapture(tabId: string, reqId: string): void {
+  pendingCaptures.set(tabId, reqId);
+  window.dispatchEvent(new Event(CAPTURE_EVENT));
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+export function BrowserPanel({ initialUrl, onNavigate, tabId }: { initialUrl?: string; onNavigate?: (u: string) => void; tabId?: string }) {
   // The webview's `src` is only its first page. Changing the attribute later
   // starts a navigation of its own, so every later load goes through
   // loadURL() — setting both used to fire two navigations per Go, the second
@@ -375,6 +387,48 @@ export function BrowserPanel({ initialUrl, onNavigate }: { initialUrl?: string; 
       wv.removeEventListener('did-fail-load', onFail);
     };
   }, []);
+
+  // For capture requests, which read it after awaits.
+  const loadErrorRef = useRef(loadError);
+  loadErrorRef.current = loadError;
+
+  // Answer a screenshot request once the page has loaded: the main process
+  // takes the shot from the webContents id.
+  useEffect(() => {
+    if (!tabId) return;
+    let alive = true;
+    const answer = async () => {
+      const reqId = pendingCaptures.get(tabId);
+      if (!reqId) return;
+      pendingCaptures.delete(tabId);
+      const wv = wvRef.current;
+      let id = 0;
+      const deadline = Date.now() + 25_000;
+      while (alive && Date.now() < deadline) {
+        try { id = wv?.getWebContentsId?.() || 0; } catch { id = 0; }
+        let busy = true;
+        try { busy = !id || wv.isLoading(); } catch { /* not attached */ }
+        if (!busy) break;
+        await sleep(200);
+      }
+      // The tab may have only just been brought to the front; give it a
+      // moment to paint (and a page's own scripts to render).
+      await sleep(700);
+      // Unmounted meanwhile: hand the request back in case this was a
+      // remount; if the tab is really gone, the main process times out.
+      if (!alive) { if (!pendingCaptures.has(tabId)) requestBrowserCapture(tabId, reqId); return; }
+      if (!id) { await window.opendev.browser.captureReady(reqId, { error: 'The browser tab never finished attaching.' }); return; }
+      const le = loadErrorRef.current;
+      await window.opendev.browser.captureReady(reqId, {
+        webContentsId: id,
+        loadError: le ? `${le.url}: ${le.description} (${le.code})` : undefined
+      });
+    };
+    const onRequest = () => { void answer(); };
+    window.addEventListener(CAPTURE_EVENT, onRequest);
+    void answer();
+    return () => { alive = false; window.removeEventListener(CAPTURE_EVENT, onRequest); };
+  }, [tabId]);
 
   const reload = () => {
     const wv = wvRef.current;
