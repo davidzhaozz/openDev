@@ -9,6 +9,7 @@ import { registerAiIpc } from './ai.js';
 import { registerServicesIpc } from './services.js';
 import { registerTasksIpc } from './tasks.js';
 import { registerJiraIpc } from './jira.js';
+import { registerSlackIpc, reconfigureSlack } from './slack.js';
 import { registerPortsIpc } from './ports.js';
 import { registerDbIpc } from './db.js';
 import { registerGitIpc } from './git.js';
@@ -37,6 +38,8 @@ import { registerRecorderIpc } from './recorder.js';
 import { registerNetworkIpc } from './netlog.js';
 import { ipcMain as electronIpc } from 'electron';
 
+const SLACK_CONNECTION_KEYS = new Set(['slackEnabled', 'slackAppToken', 'slackBotToken', 'slackUserId']);
+
 export function registerIpc() {
   ipcMain.on('__opendev_version__', (e) => { e.returnValue = app.getVersion(); });
   ipcMain.handle(IPC.WorkspaceCurrent, () => workspace.getRoot());
@@ -57,7 +60,12 @@ export function registerIpc() {
   });
 
   ipcMain.handle(IPC.SettingsGet, () => loadSettings());
-  ipcMain.handle(IPC.SettingsSet, (_e, patch) => patchSettings(patch));
+  ipcMain.handle(IPC.SettingsSet, async (_e, patch) => {
+    const next = await patchSettings(patch);
+    // Connection fields only; the notify toggles are read when they apply.
+    if (Object.keys(patch || {}).some((k) => SLACK_CONNECTION_KEYS.has(k))) reconfigureSlack();
+    return next;
+  });
 
   // Full app relaunch — used by settings that need to re-bind sockets or
   // change main-process startup behavior (e.g. MCP LAN exposure).
@@ -90,6 +98,7 @@ export function registerIpc() {
   registerServicesIpc();
   registerTasksIpc();
   registerJiraIpc();
+  registerSlackIpc();
   registerPortsIpc();
   registerDbIpc();
   registerGitIpc();

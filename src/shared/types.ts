@@ -257,6 +257,10 @@ export type AppSettings = {
   // Passed as `--model` / `--effort`; empty = let the CLI use its default.
   claudeCliModel?: string;
   claudeCliEffort?: string;
+  // Let the chat use claude.ai connector tools that act as you outside the
+  // IDE — sending email / Slack messages, forwarding, deleting, calendar
+  // changes. Off by default: reading and drafting are always allowed.
+  aiAllowOutbound?: boolean;
 
   // MCP HTTP server (127.0.0.1:53825) that lets an external Claude/Codex
   // CLI introspect IDE state. Default on for the standard workflow;
@@ -287,12 +291,30 @@ export type AppSettings = {
   // files themselves stay plain ticket lists that can be committed.
   jiraBoards?: Record<string, string>;
 
+  // Slack bridge: a Socket Mode app (no public URL) that relays DMs to the
+  // IDE chat and posts replies + notifications back. Only messages from
+  // slackUserId are acted on — the chat runs tools without approval, so the
+  // bot answers to exactly one person.
+  slackEnabled?: boolean;
+  slackAppToken?: string;       // xapp-… (connections:write), opens the socket
+  slackBotToken?: string;       // xoxb-…, posts and updates messages
+  slackUserId?: string;         // your Slack member ID, e.g. U012AB3CD
+  slackNotifyAi?: boolean;      // long AI turns started in the IDE (default on)
+  slackNotifyServices?: boolean; // a service crashing (default on)
+  slackNotifyJira?: boolean;    // a Jira ticket run finishing (default on)
+
   // Modifier+click chords that trigger LSP navigation in the editor.
   // Values: 'meta' (⌘/Ctrl), 'ctrl' (literal Control on Mac), 'alt' (⌥),
   // 'meta+shift', 'ctrl+shift', 'alt+shift'. The mouse-click itself is
   // implicit. Defaults: gotoDef = meta, findRef = meta+shift.
   editorGotoDefChord?: string;
   editorFindRefChord?: string;
+};
+
+/** Slack bridge connection state, for the Settings tab. */
+export type SlackStatus = {
+  state: 'off' | 'unconfigured' | 'connecting' | 'connected' | 'error';
+  detail?: string;
 };
 
 // ── AI Agents ──────────────────────────────────────────────────────────

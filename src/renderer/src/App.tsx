@@ -14,7 +14,7 @@ import { InstallNodePrompt } from './components/InstallNodePrompt';
 import { ServicesPanel } from './panels/ServicesPanel';
 import { AIChat } from './panels/AIChat';
 import { ConversationsList } from './panels/ConversationsList';
-import { BrowserPanel } from './panels/BrowserPanel';
+import { BrowserPanel, requestBrowserCapture } from './panels/BrowserPanel';
 import { DiffWorkspace } from './panels/DiffWorkspace';
 import { AiTaskWorkspace } from './panels/AiTaskWorkspace';
 import { DesignProposalsWorkspace } from './panels/DesignProposalsWorkspace';
@@ -459,6 +459,25 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('opendev:filetree-collapse', { detail: { path: cmd.path, all: !!(cmd as any).all } }));
       } else if (cmd?.kind === 'tree-focus') {
         window.dispatchEvent(new Event('opendev:filetree-focus'));
+      } else if (cmd?.kind === 'browser-capture') {
+        // The AI wants a screenshot: bring a browser tab to the front (it only
+        // paints while visible) and let that tab's panel answer once loaded.
+        const { reqId, url } = cmd as unknown as { reqId: string; url?: string };
+        const st = useStore.getState();
+        let tabId: string | undefined;
+        if (url) {
+          st.openBrowserTab(url);
+          tabId = useStore.getState().activeCenterId;
+        } else {
+          const active = st.centerTabs.find(t => t.id === st.activeCenterId && t.kind === 'browser');
+          const tab = active ?? [...st.centerTabs].reverse().find(t => t.kind === 'browser');
+          if (tab) { st.setActiveCenterTab(tab.id); tabId = tab.id; }
+        }
+        if (!tabId) {
+          void window.opendev.browser.captureReady(reqId, { error: 'No browser tab is open in the IDE. Pass url to open one.' });
+        } else {
+          requestBrowserCapture(tabId, reqId);
+        }
       }
     };
     const off = (window.opendev as any).mcp?.onCommand?.(handler);
@@ -764,7 +783,7 @@ export default function App() {
                     </div>
                   )}
                   {t.kind === 'terminal' && <TerminalView cwd={t.cwd} active={activeId === t.id} />}
-                  {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} />}
+                  {t.kind === 'browser' && <BrowserPanel initialUrl={t.url} tabId={t.id} />}
                   {t.kind === 'sql' && <SqlWorkspace tabId={t.id} />}
                   {t.kind === 'es' && <EsWorkspace />}
                   {t.kind === 'rest' && <RestWorkspace tabId={t.id} />}

@@ -33,6 +33,7 @@ import { serviceManager } from './services.js';
 import { agentManager } from './agents.js';
 import { restApi } from './rest.js';
 import { listBrowserTokens, scanBrowserStorage } from './browserTokens.js';
+import { captureBrowser, modelImage } from './browser.js';
 import { dbApi } from './db.js';
 import { mlxServer } from './localModels.js';
 import { listLocalModels } from './aiLocal.js';
@@ -170,6 +171,12 @@ const TOOLS: ToolDef[] = [
       requests: { type: 'array', items: { type: 'object', properties: REST_SAVED_PROPS, required: ['name', 'method', 'url'] } }
     }, required: ['requests'] } },
   { name: 'ide_browser_tokens', description: 'List the bearer tokens the IDE browser panel has sent (masked — the raw token never leaves the IDE), per API origin, with expiry. Shows which API hosts the signed-in app talks to. Pass scan:true to also read JWTs out of the page\'s local/sessionStorage. If this is empty, tell the user to open their app in the browser panel and sign in before sending requests that use auth {kind:"browser"}.', inputSchema: { type: 'object', properties: { scan: { type: 'boolean' } } } },
+  { name: 'ide_browser_screenshot', description: 'Screenshot the IDE browser panel and return the image, plus the path of the saved PNG. Without url it captures the browser tab the user has in front (else the last one opened); with url it opens that page in a new browser tab first and waits for it to load. '
+    + 'Use it to see how a page actually renders, or to show the user. When the conversation came from Slack, attach the shot to your reply by putting `[[attach: <path>]]` on a line of its own.', inputSchema: { type: 'object', properties: {
+      url: { type: 'string', description: 'Open this URL in a new browser tab and capture it (e.g. "http://localhost:3000/settings").' },
+      fullPage: { type: 'boolean', description: 'Capture the whole scrollable page instead of just the visible viewport (default false).' },
+      waitMs: { type: 'number', description: 'Extra wait after the page loads, for content that renders late (max 15000).' }
+    } } },
   { name: 'ide_rest_delete', description: 'Delete a saved REST request by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'ide_rest_open_saved', description: 'Open a saved REST request in the center workspace, optionally sending it immediately. Use with id from ide_rest_list_saved.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, send: { type: 'boolean', description: 'If true, fire the request as soon as it loads.' } }, required: ['id'] } },
 
@@ -313,7 +320,12 @@ function toSavedRequest(a: any): RestSavedRequest {
   };
 }
 
-async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> | ReturnType<typeof err>> {
+type ToolResult = {
+  content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
+  isError?: true;
+};
+
+async function callTool(name: string, args: any): Promise<ToolResult> {
   try {
     switch (name) {
       case 'ide_workspace_root':
@@ -504,6 +516,19 @@ async function callTool(name: string, args: any): Promise<ReturnType<typeof ok> 
           expires: t.expiresAt ? new Date(t.expiresAt).toISOString() : 'unknown',
           expired: t.expiresAt ? t.expiresAt < Date.now() : false
         })));
+      }
+      case 'ide_browser_screenshot': {
+        const shot = await captureBrowser({
+          url: args?.url ? String(args.url) : undefined,
+          fullPage: !!args?.fullPage,
+          waitMs: Number(args?.waitMs) || 0
+        });
+        const lines = [
+          `Saved ${shot.file} (${shot.width}×${shot.height})`,
+          `Page: ${shot.title ? `"${shot.title}" — ` : ''}${shot.url}`
+        ];
+        if (shot.loadError) lines.push(`Warning: the page failed to load — ${shot.loadError}`);
+        return { content: [{ type: 'image', ...modelImage(shot.png) }, { type: 'text', text: lines.join('\n') }] };
       }
       case 'ide_rest_delete': {
         const id = String(args?.id ?? '');

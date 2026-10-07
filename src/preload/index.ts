@@ -9,6 +9,7 @@ import type {
   AddPackageArgs,
   AddPackageResult,
   AppSettings,
+  SlackStatus,
   BrowserClock,
   InstallableTool,
   PasswordStoreStatus,
@@ -265,6 +266,9 @@ const api = {
   browser: {
     screenshot: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> =>
       ipcRenderer.invoke(IPC.BrowserScreenshotRect, rect),
+    /** Answers the main process's request to screenshot a browser tab (ide_browser_screenshot). */
+    captureReady: (reqId: string, res: { webContentsId?: number; loadError?: string; error?: string }): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.BrowserCaptureReady, reqId, res),
     /** The fake clock pages in the browser panel see; null goes back to real time. */
     getClock: (): Promise<BrowserClock> => ipcRenderer.invoke(IPC.BrowserClockGet),
     setClock: (opts: { at: number; frozen: boolean } | null): Promise<BrowserClock> =>
@@ -294,6 +298,11 @@ const api = {
     list: (): Promise<TaskItem[]> => ipcRenderer.invoke(IPC.TasksList),
     save: (t: Partial<TaskItem>): Promise<TaskItem> => ipcRenderer.invoke(IPC.TasksSave, t),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.TasksDelete, id)
+  },
+  slack: {
+    status: (): Promise<SlackStatus> => ipcRenderer.invoke(IPC.SlackStatus),
+    test: (): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke(IPC.SlackTest),
+    onStatus: (cb: (s: SlackStatus) => void) => on(IPC.SlackStatusChanged, cb)
   },
   jira: {
     list: (): Promise<JiraTask[]> => ipcRenderer.invoke(IPC.JiraList),

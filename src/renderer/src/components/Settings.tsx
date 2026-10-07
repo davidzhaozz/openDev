@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppSettings, ClaudeAuthStatus, PasswordStoreStatus, SavedLogin } from '../../../shared/types';
+import type { AppSettings, ClaudeAuthStatus, PasswordStoreStatus, SavedLogin, SlackStatus } from '../../../shared/types';
 import { THEMES, applyTheme, themeById, type Theme } from '../themes';
 import { ModelCapabilityNote } from './ModelCapabilityNote';
 import { isMacPlatform } from '../platformUi';
@@ -42,7 +42,35 @@ const EDITOR_FONT_PRESETS: Array<{ name: string; value: string }> = [
   { name: 'Courier New',       value: `'Courier New', Courier, monospace` }
 ];
 
-type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai' | 'jira' | 'passwords';
+type SettingsTab = 'appearance' | 'editor' | 'ai' | 'local-ai' | 'jira' | 'slack' | 'passwords';
+
+type SlackNotifyKey = 'slackNotifyAi' | 'slackNotifyServices' | 'slackNotifyJira';
+
+const SLACK_STATE_LABEL: Record<SlackStatus['state'], string> = {
+  off: 'Off',
+  unconfigured: 'Not set up',
+  connecting: 'Connecting…',
+  connected: 'Connected',
+  error: 'Not connected'
+};
+
+// Pasted into api.slack.com → Create New App → From a manifest. Socket Mode,
+// so the IDE needs no public URL; DMs (message.im) and @-mentions only.
+const SLACK_MANIFEST = JSON.stringify({
+  display_information: { name: 'openDev IDE', description: 'Talk to your openDev IDE from Slack' },
+  features: {
+    app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
+    bot_user: { display_name: 'openDev', always_online: true }
+  },
+  oauth_config: { scopes: { bot: ['chat:write', 'files:write', 'im:history', 'im:read', 'im:write', 'app_mentions:read'] } },
+  settings: {
+    event_subscriptions: { bot_events: ['message.im', 'app_mention'] },
+    interactivity: { is_enabled: false },
+    org_deploy_enabled: false,
+    socket_mode_enabled: true,
+    token_rotation_enabled: false
+  }
+}, null, 2);
 
 // Modifier-click chords for editor LSP navigation. Stored as a string in
 // AppSettings so a future "Cmd+Option" kind of combo could be added
@@ -79,12 +107,20 @@ export function Settings({ onClose }: Props) {
   const [anthropicKey, setAnthropicKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [claudeCli, setClaudeCli] = useState('');
+  const [aiAllowOutbound, setAiAllowOutbound] = useState(false);
   const [jiraSite, setJiraSite] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
   const [jiraToken, setJiraToken] = useState('');
   const [jiraJql, setJiraJql] = useState('');
   const [jiraDone, setJiraDone] = useState('');
   const [jiraProbe, setJiraProbe] = useState<string | undefined>();
+  const [slackEnabled, setSlackEnabled] = useState(false);
+  const [slackAppToken, setSlackAppToken] = useState('');
+  const [slackBotToken, setSlackBotToken] = useState('');
+  const [slackUserId, setSlackUserId] = useState('');
+  const [slackNotify, setSlackNotify] = useState<Record<SlackNotifyKey, boolean>>({ slackNotifyAi: true, slackNotifyServices: true, slackNotifyJira: true });
+  const [slackStatus, setSlackStatus] = useState<SlackStatus>({ state: 'off' });
+  const [slackProbe, setSlackProbe] = useState<string | undefined>();
   const [codexCli, setCodexCli] = useState('');
   const [anthropicModel, setAnthropicModel] = useState('claude-sonnet-4-6');
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
@@ -116,11 +152,21 @@ export function Settings({ onClose }: Props) {
       if (s.anthropicApiKey) setAnthropicKey(s.anthropicApiKey);
       if (s.openaiApiKey) setOpenaiKey(s.openaiApiKey);
       if (s.claudeCliPath) setClaudeCli(s.claudeCliPath);
+      if (s.aiAllowOutbound) setAiAllowOutbound(true);
       if (s.jiraSite) setJiraSite(s.jiraSite);
       if (s.jiraEmail) setJiraEmail(s.jiraEmail);
       if (s.jiraApiToken) setJiraToken(s.jiraApiToken);
       if (s.jiraJql) setJiraJql(s.jiraJql);
       if (s.jiraDoneStatus) setJiraDone(s.jiraDoneStatus);
+      if (s.slackEnabled) setSlackEnabled(true);
+      if (s.slackAppToken) setSlackAppToken(s.slackAppToken);
+      if (s.slackBotToken) setSlackBotToken(s.slackBotToken);
+      if (s.slackUserId) setSlackUserId(s.slackUserId);
+      setSlackNotify({
+        slackNotifyAi: s.slackNotifyAi !== false,
+        slackNotifyServices: s.slackNotifyServices !== false,
+        slackNotifyJira: s.slackNotifyJira !== false
+      });
       if (s.codexCliPath) setCodexCli(s.codexCliPath);
       if (s.anthropicModel) setAnthropicModel(s.anthropicModel);
       if (s.openaiModel) setOpenaiModel(s.openaiModel);
@@ -184,6 +230,11 @@ export function Settings({ onClose }: Props) {
     }
     persist({ themeId: t.id });
   };
+
+  useEffect(() => {
+    window.opendev.slack.status().then(setSlackStatus).catch(() => {});
+    return window.opendev.slack.onStatus(setSlackStatus);
+  }, []);
 
   const persist = (patch: Partial<AppSettings>) => {
     window.opendev.settings.set(patch);
@@ -326,6 +377,7 @@ export function Settings({ onClose }: Props) {
             ['ai', 'AI'],
             ['local-ai', 'Local AI'],
             ['jira', 'Jira'],
+            ['slack', 'Slack'],
             ['passwords', 'Passwords']
           ] as Array<[SettingsTab, string]>).map(([k, label]) => (
             <div key={k}
@@ -336,6 +388,102 @@ export function Settings({ onClose }: Props) {
         </div>
 
         <div className="settings-section">
+          {tab === 'slack' && <>
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Slack</div>
+              <div className="settings-sub">
+                Message the IDE from Slack and get its replies back there. A DM to your bot runs in the IDE chat with the
+                whole IDE available (files, terminal, git, services, databases, REST, Jira); the IDE also DMs you when a long
+                AI run, a service, or a Jira run needs you. It connects out over Socket Mode — no public URL or open port —
+                and answers only your member ID, so nobody else can reach it.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <input type="checkbox" checked={slackEnabled}
+                    onChange={(e) => { setSlackEnabled(e.target.checked); persist({ slackEnabled: e.target.checked }); }} />
+                  Connect to Slack
+                </label>
+                <span className="settings-sub" style={{ margin: 0 }}>{SLACK_STATE_LABEL[slackStatus.state]}{slackStatus.detail ? ` — ${slackStatus.detail}` : ''}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">1. Create the Slack app</div>
+              <div className="settings-sub">
+                Copy the manifest, then at api.slack.com/apps choose <b>Create New App → From a manifest</b>, pick your
+                workspace and paste it. Install the app to the workspace.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control" style={{ gap: 8 }}>
+                <button onClick={async () => {
+                  try { await navigator.clipboard.writeText(SLACK_MANIFEST); setSlackProbe('manifest copied'); }
+                  catch { setSlackProbe('could not copy — clipboard unavailable'); }
+                }}>Copy manifest</button>
+                <button onClick={() => window.opendev.aiAuth.openUrl('https://api.slack.com/apps?new_app=1')}>Open api.slack.com</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">2. Tokens and your member ID</div>
+              <div className="settings-sub">
+                App-level token: <b>Basic Information → App-Level Tokens</b>, scope <code>connections:write</code> (xapp-…).
+                Bot token: <b>OAuth &amp; Permissions</b> (xoxb-…). Member ID: your Slack profile → ⋯ → <b>Copy member ID</b> (U…).
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                <input type="password" value={slackAppToken} placeholder="xapp-…" spellCheck={false}
+                  onChange={(e) => { setSlackAppToken(e.target.value); persist({ slackAppToken: e.target.value.trim() }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <input type="password" value={slackBotToken} placeholder="xoxb-…" spellCheck={false}
+                  onChange={(e) => { setSlackBotToken(e.target.value); persist({ slackBotToken: e.target.value.trim() }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <input type="text" value={slackUserId} placeholder="U0123ABCDEF" spellCheck={false}
+                  onChange={(e) => { setSlackUserId(e.target.value); persist({ slackUserId: e.target.value.trim() }); }}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button onClick={async () => {
+                    setSlackProbe('checking…');
+                    const r = await window.opendev.slack.test();
+                    setSlackProbe(r.message);
+                  }}>Send test message</button>
+                  {slackProbe && <span className="settings-sub" style={{ margin: 0 }}>{slackProbe}</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Notify me on Slack when</div>
+              <div className="settings-sub">Messages you send from Slack are always answered there; these are for work started in the IDE.</div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                {([
+                  ['slackNotifyAi', 'an AI run started in the IDE finishes after more than a minute'],
+                  ['slackNotifyServices', 'a service stops with an error'],
+                  ['slackNotifyJira', 'a Jira ticket run finishes']
+                ] as Array<[SlackNotifyKey, string]>).map(([k, label]) => (
+                  <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <input type="checkbox" checked={slackNotify[k]}
+                      onChange={(e) => { setSlackNotify({ ...slackNotify, [k]: e.target.checked }); persist({ [k]: e.target.checked }); }} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          </>}
+
           {tab === 'appearance' && <>
           <div className="settings-row">
             <div className="settings-row-text">
@@ -443,6 +591,25 @@ export function Settings({ onClose }: Props) {
           {tab === 'passwords' && <SavedLoginsSection />}
 
           {tab === 'ai' && <>
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <div className="settings-label">Connectors: send and delete</div>
+              <div className="settings-sub">
+                With your claude.ai Slack and Microsoft 365 connectors, the chat can read and search Slack and Outlook and write drafts.
+                Sending email or Slack messages, forwarding, deleting mail and changing your calendar are blocked unless this is on —
+                the chat runs tools without asking, and a message it reads could try to instruct it.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <div className="settings-control">
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <input type="checkbox" checked={aiAllowOutbound}
+                    onChange={(e) => { setAiAllowOutbound(e.target.checked); persist({ aiAllowOutbound: e.target.checked }); }} />
+                  Let the AI send, forward and delete as me
+                </label>
+              </div>
+            </div>
+          </div>
           <ClaudeAccountRow />
           <McpStatusRow />
 

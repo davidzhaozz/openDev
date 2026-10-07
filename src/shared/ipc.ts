@@ -74,6 +74,7 @@ export const IPC = {
 
   // browser
   BrowserScreenshotRect: 'browser:screenshot-rect',
+  BrowserCaptureReady: 'browser:capture-ready',
   BrowserPicked: 'browser:picked',
   BrowserClockGet: 'browser:clock-get',
   BrowserClockSet: 'browser:clock-set',
@@ -111,6 +112,10 @@ export const IPC = {
   JiraStop: 'jira:stop',
   JiraLog: 'jira:log',
   JiraTestConnection: 'jira:test-connection',
+  // slack bridge
+  SlackStatus: 'slack:status',
+  SlackTest: 'slack:test',
+  SlackStatusChanged: 'slack:status-changed',
   JiraConfigured: 'jira:configured',
   JiraBoards: 'jira:boards',
   JiraSelectBoard: 'jira:select-board',
